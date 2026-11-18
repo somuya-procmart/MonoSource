@@ -1,0 +1,45 @@
+'use client';
+import Link from 'next/link';
+import { use, useEffect, useState } from 'react';
+import { api } from '../../../lib/api';
+import { Icon } from '../../../components/Icon';
+import { can, useApp } from '../../shell';
+import { num, price } from '../../../lib/format';
+import { useConfirm } from '../../../components/Confirm';
+import { RFQ_STATUS } from '../../../lib/format';
+
+export default function Rfq({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params); const ask = useConfirm(); const { me, notify } = useApp(); const [r, setR] = useState<any>(null); const [err, setErr] = useState('');
+  const [qs, setQs] = useState(''); const [vals, setVals] = useState<Record<string, { p: string; f: string; d: string }>>({}); const [reason, setReason] = useState<Record<string, string>>({}); const [busy, setBusy] = useState('');
+  const load = () => api(`/rfqs/${id}`).then(setR).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, [id]); // eslint-disable-line
+  const run = async (key: string, f: () => Promise<any>, ok: string) => { setBusy(key); try { await f(); notify(ok); await load(); } catch (e: any) { notify(e.message, { error: true }); } finally { setBusy(''); } };
+  if (err) return <div className="card"><div className="empty"><b>We couldn’t open this request for quotation</b><p>{err}</p><div className="acts"><Link href="/sourcing" className="btn sec sm">Back to sourcing</Link></div></div></div>;
+  if (!r) return <div style={{ display: 'grid', gap: 12 }}><div className="skel" style={{ height: 70 }} /><div className="skel" style={{ height: 200 }} /></div>;
+  const open = r.status === 'open'; const closed = r.status === 'closed'; const st = RFQ_STATUS[r.status] ?? [r.status, ''];
+  const setV = (lid: string, k: 'p' | 'f' | 'd', v: string) => setVals({ ...vals, [lid]: { ...{ p: '', f: '', d: '' }, ...(vals[lid] ?? {}), [k]: v } });
+  const sendQuote = () => run('quote', () => api(`/rfqs/${id}/quotes`, { body: { supplierId: qs, lines: r.comparison.filter((l: any) => vals[l.id]?.p).map((l: any) => ({ rfqLineId: l.id, unitPrice: Number(vals[l.id].p), freightPerUnit: Number(vals[l.id].f || 0), leadTimeDays: vals[l.id].d ? Number(vals[l.id].d) : undefined, uom: l.uom })) } }), 'Quotation recorded');
+  return <>
+    <div className="crumbs"><Link href="/sourcing">Sourcing</Link>›<b>{r.number}</b></div>
+    <div className="pagehead"><div><div className="title-row"><h1>{r.number}</h1><span className={`tag lg ${st[1]}`}>{st[0]}</span></div><p>Quotes are compared on landed unit cost (price + freight, excluding GST). The customer requires at least {r.min_quotes} quote{r.min_quotes === 1 ? '' : 's'} before awarding.</p></div>
+      {open && can(me, 'buying:source') && <div className="actions"><button className={`sec ${busy === 'close' ? 'busy' : ''}`} disabled={!!busy} onClick={async () => { if (await ask({ title: 'Stop collecting quotes?', body: `Suppliers who haven’t replied can no longer quote. ${r.invitations.filter((i: any) => i.quoted).length} of ${r.invitations.length} have quoted.`, confirm: 'Stop collecting quotes' })) run('close', () => api(`/rfqs/${id}/close`, { method: 'POST', body: {} }), 'Quote collection closed — ready to award'); }}>Stop collecting quotes</button></div>}</div>
+    <section className="card"><div className="sec-head"><h2>Invited suppliers</h2><span className="hint">{r.invitations.filter((i: any) => i.quoted).length} of {r.invitations.length} have quoted</span></div>
+      <div className="row" style={{ marginBottom: 0 }}>{r.invitations.map((i: any) => <span key={i.id} className={`tag lg ${i.quoted ? 'ok' : ''}`}>{i.quoted ? <Icon name="check" size={13} /> : <Icon name="hourglass" size={13} />}{i.name} · {i.quoted ? 'Quoted' : 'Awaiting quote'}</span>)}</div>
+      {open && can(me, 'buying:source') && <div style={{ marginTop: 'var(--sp-5)', paddingTop: 'var(--sp-4)', borderTop: '1px solid var(--bd)' }}><h3>Record a quotation received outside MonoSource</h3><p className="mut small">For quotes sent by phone or post. Quotes received through the response link are recorded automatically.</p>
+        <label className="field" style={{ maxWidth: 320 }}><span>Supplier</span><select value={qs} onChange={(e) => setQs(e.target.value)}><option value="">Select a supplier…</option>{r.invitations.filter((i: any) => !i.quoted).map((i: any) => <option key={i.id} value={i.supplier_id ?? i.id}>{i.name}</option>)}</select></label>
+        {r.comparison.map((l: any) => <div key={l.id} className="form-grid" style={{ gridTemplateColumns: 'minmax(200px,1.4fr) repeat(3,minmax(140px,1fr))', alignItems: 'end' }}><div className="field"><span>Item</span><div style={{ height: 'var(--h-md)', display: 'flex', alignItems: 'center' }}><b>{l.item_name}</b>&nbsp;<span className="mut">· {num(l.qty)} {l.uom}</span></div></div>
+          <label className="field"><span>Unit price (₹)</span><input type="number" min={0} value={vals[l.id]?.p ?? ''} onChange={(e) => setV(l.id, 'p', e.target.value)} placeholder="0.00" /></label>
+          <label className="field"><span>Freight per unit (₹)</span><input type="number" min={0} value={vals[l.id]?.f ?? ''} onChange={(e) => setV(l.id, 'f', e.target.value)} placeholder="0.00" /></label>
+          <label className="field"><span>Lead time (days)</span><input type="number" min={0} value={vals[l.id]?.d ?? ''} onChange={(e) => setV(l.id, 'd', e.target.value)} placeholder="e.g. 10" /></label></div>)}
+        <button className={busy === 'quote' ? 'busy' : ''} disabled={!qs || !r.comparison.some((l: any) => vals[l.id]?.p) || !!busy} onClick={sendQuote}>Save quotation</button></div>}</section>
+    {r.comparison.map((l: any) => <section className="card flush" key={l.id}><div className="sec-head" style={{ padding: 'var(--sp-4) var(--sp-5) 0' }}><h2>{l.item_name} <span className="mut" style={{ fontWeight: 400 }}>· {num(l.qty)} {l.uom}</span></h2>{l.award && <span className="tag ok lg"><Icon name="checkCircle" size={13} />Awarded{l.award.is_l1 ? ' to the lowest quote' : ` above the lowest quote — ${l.award.reason}`}</span>}</div>
+      <div style={{ overflowX: 'auto' }}><table><thead><tr><th>Rank</th><th>Supplier</th><th className="num">Unit price</th><th className="num">Freight</th><th className="num">Landed cost</th><th className="num">vs lowest</th><th className="num">Lead time</th>{closed && <th />}</tr></thead><tbody>
+        {l.ranked.map((q: any) => { const rec = l.recommended_quote_line_id === q.quoteLineId; return <tr key={q.quoteLineId} style={rec ? { background: 'var(--pri-soft)' } : {}}><td>{q.isL1 ? <span className="tag ok" title="Lowest landed cost">L1 · lowest</span> : `L${q.rank}`}</td><td><b>{q.supplierName}</b>{rec && <span className="tag pri" style={{ marginLeft: 6 }}>Recommended</span>}</td>
+          <td className="num">{price(q.unitPrice)}</td><td className="num">{price(q.freightPerUnit)}</td><td className="num"><b>{price(q.landedUnitCost)}</b></td><td className="num">{q.deltaPct ? `+${q.deltaPct}%` : '—'}</td><td className="num">{q.leadTimeDays != null ? `${q.leadTimeDays} days` : '—'}</td>
+          {closed && <td>{!l.award && <div className="row" style={{ margin: 0, justifyContent: 'flex-end' }}>
+            {can(me, 'buying:source') && !rec && <button className="sec sm" disabled={!!busy} onClick={() => run('rec' + q.quoteLineId, () => api(`/rfqs/${id}/recommend`, { body: { rfqLineId: l.id, quoteLineId: q.quoteLineId } }), 'Recommendation saved')}>Recommend</button>}
+            {can(me, 'buying:approve') && <>{!q.isL1 && <input aria-label="Reason for not choosing the lowest quote" placeholder="Why not the lowest? (required)" value={reason[q.quoteLineId] ?? ''} onChange={(e) => setReason({ ...reason, [q.quoteLineId]: e.target.value })} style={{ height: 'var(--h-sm)', width: 220 }} />}
+              <button className={`sm ${busy === 'aw' + q.quoteLineId ? 'busy' : ''}`} disabled={!!busy || (!q.isL1 && !(reason[q.quoteLineId] ?? '').trim())} onClick={async () => { if (await ask({ title: `Award ${l.item_name} to ${q.supplierName}?`, body: `${price(q.landedUnitCost)} landed per ${l.uom}${q.isL1 ? ', the lowest quote' : `, ${q.deltaPct}% above the lowest quote`}. A requisition is raised in SAP for approval. This can’t be undone here.`, confirm: 'Award' })) run('aw' + q.quoteLineId, () => api(`/rfqs/${id}/award`, { body: { awards: [{ rfqLineId: l.id, quoteLineId: q.quoteLineId, reason: reason[q.quoteLineId] }] } }), 'Awarded — the requisition goes to SAP (simulated)'); }}>Award</button></>}</div>}</td>}</tr>; })}
+        {!l.ranked.length && <tr><td colSpan={8}><div className="empty" style={{ padding: 'var(--sp-6)' }}><b>No quotes yet</b><p>Quotes appear here as suppliers respond. MonoSource follows up with suppliers who haven’t replied.</p></div></td></tr>}</tbody></table></div>
+      {l.rejected.length > 0 && <div className="banner bad" style={{ margin: 'var(--sp-3) var(--sp-5)' }}><Icon name="alert" size={16} /><span>{l.rejected.length} quote{l.rejected.length > 1 ? 's were' : ' was'} left out because the unit of measure differs from the request.</span></div>}</section>)}</>;
+}

@@ -1,0 +1,40 @@
+'use client';
+import Link from 'next/link';
+import { use, useEffect, useState } from 'react';
+import { api } from '../../../lib/api';
+import { Icon } from '../../../components/Icon';
+import { can, useApp } from '../../shell';
+import { STATUS_TONE, ago, dmy, inr, num, price, statusLabel } from '../../../lib/format';
+
+const FLOW = ['pr_created', 'po_released', 'acknowledged', 'dispatched', 'grn_posted', 'invoiced', 'paid'];
+const POS: Record<string, number> = { pr_requested: -1, pr_created: 0, po_released: 1, acknowledged: 2, partially_dispatched: 2, dispatched: 3, delivered: 3, partially_received: 3, grn_posted: 4, invoiced: 5, paid: 6, closed: 6 };
+const LABEL: Record<string, string> = { pr_created: 'Requisition in SAP', po_released: 'PO released', acknowledged: 'Supplier confirmed', dispatched: 'In transit', grn_posted: 'Received', invoiced: 'Invoiced', paid: 'Paid' };
+const EVENT: Record<string, string> = { pr_requested: 'Requisition sent to SAP', pr_created: 'Requisition created', po_released: 'Purchase order released', acknowledged: 'Supplier confirmed the order', dispatched: 'Goods dispatched', grn_partial: 'Goods partly received', grn_posted: 'Goods received', invoiced: 'Supplier invoiced', paid: 'Payment made', awarded: 'Awarded after quotes', follow_up: 'Supplier reminded', supplier_rejected: 'Supplier declined the order', requirement_submitted: 'Requirement submitted' };
+
+export default function Order({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params); const { me, notify } = useApp(); const [o, setO] = useState<any>(null); const [err, setErr] = useState('');
+  const load = () => api(`/orders/${id}`).then(setO).catch((e) => setErr(e.message));
+  useEffect(() => { load(); const t = setInterval(load, 6000); return () => clearInterval(t); /* eslint-disable-next-line */ }, [id]);
+  const demo = async (f: () => Promise<any>, ok: string) => { try { await f(); notify(ok); load(); } catch (e: any) { notify(e.message, { error: true }); } };
+  if (err) return <div className="card"><div className="empty"><b>We couldn’t open this order</b><p>{err}</p><div className="acts"><Link href="/activity?tab=orders" className="btn sec sm">Back to my orders</Link></div></div></div>; if (!o) return <div className="skel" style={{ height: 320 }} />;
+  const at = POS[o.status] ?? 0; const part = o.status.startsWith('partially'); const total = o.lines.reduce((s: number, l: any) => s + (l.unitPrice ?? 0) * l.ordered, 0);
+  const next = ({ pr_created: 'Waiting for the purchase order to be released in SAP.', po_released: 'Waiting for the supplier to confirm quantity and date.', acknowledged: 'Waiting for the supplier to dispatch.', partially_dispatched: 'Supplier has sent part of the order.', dispatched: 'Goods are on the way. Waiting for goods receipt.', partially_received: 'Part received. Waiting for the rest.', grn_posted: 'Waiting for the supplier’s invoice.', invoiced: 'Invoice with finance for payment.', paid: 'Complete.' } as Record<string, string>)[o.status];
+  return <>
+    <div className="crumbs"><Link href="/activity?tab=orders">My activity</Link>›<b>{o.po ?? o.pr ?? 'Order'}</b></div>
+    <div className="pagehead"><div><div className="title-row"><h1>{o.po ?? 'Order'}</h1><span className={`tag lg ${STATUS_TONE(o.status)}`}>{statusLabel(o.status)}</span></div><p>{o.supplier} · deliver to {o.plant} · from <Link href={`/requirements/${o.requirementId}`}>{o.requirement}</Link> · {inr(total)}</p></div></div>
+    <div className="card"><div className="steps">{FLOW.map((f, i) => <div key={f} className={`step ${i < at ? 'done' : i === at ? 'now' : ''}`}><i />{i === at && part ? statusLabel(o.status) : LABEL[f]}</div>)}</div>
+      {next && <div className="mut" style={{ textAlign: 'center', marginTop: 4 }}><Icon name="clock" size={15} /> {next}</div>}
+      <div className="banner" style={{ margin: '14px 0 0', flexWrap: 'wrap' }}><Icon name="info" size={17} /><span>PR/PO, goods receipt and payment come from a <b>simulated SAP</b> in this demo. Supplier confirmations and dispatch come through the supplier response page.</span>
+        {can(me, 'integration:simulate') && <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+          {o.status === 'pr_created' && <button className="sec" onClick={() => demo(() => api(`/streams/${o.id}/simulate`, { body: { step: 'po_released' } }), 'PO released (simulated)')}>Simulate: PO released</button>}
+          {['dispatched', 'partially_dispatched', 'partially_received'].includes(o.status) && <button className="sec" onClick={() => demo(() => api(`/streams/${o.id}/grn`, { body: { lines: o.lines.filter((l: any) => l.dispatched - l.received - l.rejected > 0).map((l: any) => ({ lineId: l.id, accepted: l.dispatched - l.received - l.rejected, rejected: 0 })) } }), 'Goods received (simulated)')}>Simulate: goods received</button>}
+          {o.status === 'invoiced' && <button className="sec" onClick={() => demo(() => api(`/streams/${o.id}/simulate`, { body: { step: 'paid' } }), 'Payment made (simulated)')}>Simulate: payment</button>}</span>}</div></div>
+    <div className="split">
+      <div>
+        <div className="card" style={{ padding: 0, overflowX: 'auto' }}><table><thead><tr><th>Item</th><th>Ordered</th><th>Supplier committed</th><th>Dispatched</th><th>Received</th><th>Price</th></tr></thead><tbody>{o.lines.map((l: any) => <tr key={l.id}><td><Link href={`/product/${l.itemId}`}><b>{l.item}</b></Link></td><td>{num(l.ordered)} {l.uom}</td><td>{l.committed == null ? <span className="mut">Awaiting</span> : <>{num(l.committed)}{l.committed < l.ordered && <span className="tag warn" style={{ marginLeft: 6 }}>partial</span>}</>}</td><td>{num(l.dispatched)}</td><td>{num(l.received)}{l.rejected > 0 && <span className="tag bad" style={{ marginLeft: 6 }}>{num(l.rejected)} rejected</span>}</td><td>{price(l.unitPrice)}</td></tr>)}</tbody></table></div>
+        {o.shipments.length > 0 && <div className="card"><h2>Shipments</h2>{o.shipments.map((s: any) => <div key={s.asn} className="row" style={{ padding: '4px 0' }}><Icon name="truck" size={18} /><b>{s.asn}</b><span className="mut">{s.carrier ?? '—'} {s.trackingRef ?? ''}</span><span style={{ marginLeft: 'auto' }} className={s.expectedDate && new Date(s.expectedDate) < new Date() && o.status !== 'grn_posted' ? 'err' : 'mut'}>{s.expectedDate ? `Expected ${dmy(s.expectedDate)}` : `Sent ${dmy(s.at)}`}</span></div>)}</div>}
+        {(o.grn.length > 0 || o.invoices.length > 0) && <div className="card"><h2>Receipt and invoice</h2>{o.grn.map((g: any) => <div key={g.grn} className="row"><Icon name="checkCircle" size={18} /><b>{g.grn}</b><span className="mut">{num(g.accepted)} accepted{g.rejected > 0 ? `, ${num(g.rejected)} rejected` : ''}</span>{g.simulated && <span className="tag sim">simulated</span>}</div>)}{o.invoices.map((v: any) => <div key={v.invoiceNumber} className="row"><Icon name="file" size={18} /><b>{v.invoiceNumber}</b><span className="mut">{inr(v.amount)}</span><span className={`tag ${v.status === 'paid' ? 'ok' : 'pri'}`}>{v.status}</span></div>)}</div>}
+      </div>
+      <aside><div className="card"><h2>Activity</h2>{[...o.events].reverse().map((e: any, i: number) => <div key={i} style={{ display: 'flex', gap: 10, padding: '7px 0', borderBottom: i < o.events.length - 1 ? '1px solid var(--bd)' : 0 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--pri)', marginTop: 7, flex: 'none' }} /><div><div style={{ fontWeight: 500 }}>{EVENT[e.kind] ?? e.kind.replace(/_/g, ' ')}{e.simulated && <span className="tag sim" style={{ marginLeft: 6 }}>simulated</span>}</div><div className="mut" style={{ fontSize: 12 }}>{ago(e.at)}</div></div></div>)}</div>
+        {o.followUps.length > 0 && <div className="card"><h2>Supplier follow-ups</h2>{o.followUps.map((f: any, i: number) => <div key={i} className="mut" style={{ fontSize: 13, padding: '3px 0' }}><Icon name="refresh" size={13} /> {ago(f.at)} · {f.channel} · {f.kind} · {f.status}{f.simulated && ' (simulated)'}</div>)}</div>}</aside></div></>;
+}

@@ -1,0 +1,12 @@
+node_modules
+.next
+dist
+.storage
+.env*
+
+# design-check tooling output
+.taste-skill/
+apps/web/.taste-skill/
+apps/web/shots/
+*.tsbuildinfo
+.DS_Store
