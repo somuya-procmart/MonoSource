@@ -1,5 +1,14 @@
 # Deploying MonoSource
 
+## Current live deployment
+
+- Website: https://monosource.vercel.app (Vercel project `somuya/monosource`)
+- API: https://api-production-87e7b122.up.railway.app (Railway project `monosource`, service `api`, Postgres + volume at `/data`)
+- First sign-in: organisation ID `platform`, with the admin email and password kept in the git-ignored `.env.deploy` file of the machine that set it up.
+- The API redeploys on every push to `main` (Railway is connected to GitHub).
+- The website is **not** connected to GitHub yet: redeploy it from the repo root with `vercel deploy --prod`, or connect it once in Vercel → Project → Settings → Git (needs a GitHub login connection on the Vercel account).
+
+
 Two services and a database:
 
 | Part | Host | Why |
