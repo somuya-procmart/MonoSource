@@ -8,7 +8,7 @@ Two services and a database:
 | API (`apps/api`, NestJS) | **Railway** | Must stay running: the outbox (SAP, simulated) and supplier follow-ups run on timers, and uploaded files are kept on disk |
 | Postgres | **Railway Postgres** | Same project as the API, private network |
 
-Config already in the repo: `apps/api/railway.json` (build, migrations before each deploy, start, health check) and `apps/web/vercel.json` (framework, security headers, skip builds when only the API changed).
+Config already in the repo: `railway.json` at the repo root (Railway reads it automatically: build, migrations before each deploy, start, health check) and `apps/web/vercel.json` (framework, security headers, skip builds when only the API changed).
 
 > ⚠ The SAP/ERP connection is **simulated** (`mock-sap`). A live deployment is a demo or pilot, not a system connected to SAP.
 
@@ -18,8 +18,8 @@ Config already in the repo: `apps/api/railway.json` (build, migrations before ea
 
 1. Create a project at railway.com → **New → Database → PostgreSQL**.
 2. **New → GitHub repo → `somuya-procmart/MonoSource`.** This is the API service.
-   - **Settings → Root Directory:** leave empty (the repo root; the API needs the root `package-lock.json`).
-   - **Settings → Config-as-code → Railway config file:** `/apps/api/railway.json`
+   - **Settings → Root Directory:** leave empty. No build or start command needed; they come from `railway.json`.
+   - If you earlier set **Config-as-code → Railway config file** to `/apps/api/railway.json`, clear it (that file has moved to the root).
    - **Settings → Networking → Generate domain.** This is your API address, e.g. `https://monosource-api.up.railway.app`.
 3. **Volume:** right-click the API service → **Attach volume**, mount path `/data`. Uploaded contract PDFs and product images live here.
 4. **Variables** on the API service (`${{…}}` are Railway references, type them as shown):
