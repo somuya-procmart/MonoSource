@@ -1,11 +1,16 @@
 {
   "name": "monosource",
   "private": true,
-  "workspaces": ["apps/*"],
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "db:migrate": "npm -w apps/api run migrate",
     "api": "npm -w apps/api run start:dev",
     "web": "npm -w apps/web run dev",
     "test": "npm -w apps/api test"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

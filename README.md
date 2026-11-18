@@ -15,6 +15,8 @@ npm test                            # needs a local Postgres DB named monosource
 ```
 Docker alternative for dependencies: `docker compose -f infra/docker-compose.yml up -d`.
 
+Going live (Vercel + Railway): see `DEPLOY.md`.
+
 Docs: `docs/00-phase0-architecture-assessment.md`, `docs/DECISION_REGISTER.md`, `docs/adr/`, `docs/PROGRESS.md`.
 
 ⚠ The ERP adapter is **simulated** (`mock-sap`). No live SAP/Ariba integration exists.

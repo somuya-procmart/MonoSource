@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "start:dev": "ts-node --transpile-only src/main.ts",
     "migrate": "tsx src/db/migrate.ts",
+    "migrate:prod": "node dist/db/migrate.js",
+    "admin:prod": "node dist/db/create-admin.js",
     "seed": "tsx src/db/seed.ts",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand --watchman=false",
     "demo": "ts-node --transpile-only scripts/demo-run.ts"
