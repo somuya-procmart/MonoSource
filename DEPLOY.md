@@ -37,7 +37,7 @@ Config already in the repo: `railway.json` at the repo root (Railway reads it au
    | `PLATFORM_ADMIN_PASSWORD` | at least 12 characters |
    | `ANTHROPIC_API_KEY` | *optional.* Turns on AI reading of contract PDFs. **The PDF text is then sent to Anthropic**, so check customer NDAs first |
 
-5. Deploy. Before every deploy Railway runs the migrations, which also create the `monosource_app` user and the first platform admin. The deploy is live when `https://<api-domain>/docs` opens.
+5. Deploy. On every start the API first runs the migrations (safe to repeat), which also create the `monosource_app` user and the first platform admin. The deploy is live when `https://<api-domain>/docs` opens.
 
 The app connects as `monosource_app`, which cannot bypass row-level security, so one customer's data can never reach another's. Only migrations use the admin URL.
 
@@ -81,6 +81,6 @@ The demo loader **wipes the whole database** and refills it with the fictional "
 ## After going live
 
 - Every push to `main` redeploys both. Vercel skips the web build when only the API changed.
-- Railway runs new migrations before the new API version starts. If a migration fails, the old version keeps running.
+- New migrations run when the new API version starts. If one fails, that version doesn't start and Railway keeps the previous one serving.
 - The API allows 600 requests a minute per client by default (`RATE_LIMIT` to change).
 - Not built yet: cloud file storage (files live on the Railway volume, so back it up), a real SAP connection, email/WhatsApp sending (previews only).

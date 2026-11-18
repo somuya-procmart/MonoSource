@@ -3,10 +3,14 @@
   "build": {
     "builder": "RAILPACK",
     "buildCommand": "npm run build",
-    "watchPatterns": ["apps/api/**", "package.json", "package-lock.json", "railway.json"]
+    "watchPatterns": [
+      "apps/api/**",
+      "package.json",
+      "package-lock.json",
+      "railway.json"
+    ]
   },
   "deploy": {
-    "preDeployCommand": ["npm -w apps/api run migrate:prod && npm -w apps/api run admin:prod"],
     "startCommand": "npm start",
     "healthcheckPath": "/docs",
     "healthcheckTimeout": 120,

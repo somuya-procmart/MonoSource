@@ -6,7 +6,7 @@
   ],
   "scripts": {
     "build": "npm -w apps/api run build",
-    "start": "npm -w apps/api run start",
+    "start": "npm -w apps/api run migrate:prod && npm -w apps/api run admin:prod && npm -w apps/api run start",
     "db:migrate": "npm -w apps/api run migrate",
     "api": "npm -w apps/api run start:dev",
     "web": "npm -w apps/web run dev",
