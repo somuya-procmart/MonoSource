@@ -146,8 +146,8 @@ export async function seedDemo(base: string, adminDbUrl: string, deps: { outbox:
   // R3 — waiting for supplier confirmation (follow-ups will have chased) + a line with no contract at a Power plant
   r = await order('central', plantId('NPP2'), [{ item: 'h34', qty: 100, needBy: '2026-12-01' }, { item: 'cab3c', qty: 500 }]);
   { const st = streamOf(r, 'hydromax'); await sim(plantproc, st.id, 'po_released'); await sql(`UPDATE streams SET status_at = now() - interval '52 hours' WHERE id=$1`, [st.id]); }
-  // R4 — Ports: single-supplier ARC at Model 3 + an item that needs quotes
-  r = await order('requester2', plantId('HT01'), [{ item: 'b6205s', qty: 30 }, { item: 'cab4c', qty: 300, needBy: '2026-12-15' }]);
+  // R4 — Ports: ARC order with the buyer's chosen supplier (Apex) + an item that needs quotes
+  r = await order('requester2', plantId('HT01'), [{ item: 'b6205s', qty: 30, supplier: 'apex' }, { item: 'cab4c', qty: 300, needBy: '2026-12-15' }]);
   { const st = streamOf(r, 'apex'), ln = lineOf(r, 'b6205s').id; await sim(plantproc, st.id, 'po_released'); await portal('apex', st.id, 'acknowledge', { lines: [{ lineId: ln, qty: 30, date: '2026-11-24' }] }); }
   const rfq1 = await call('/rfqs', U.ops, { requirementId: r.id, requirementLineIds: [lineOf(r, 'cab4c').id], supplierIds: [sup.voltline, sup.apex, sup.boltcraft] });
   { const rr = await call(`/rfqs/${rfq1.id}`, U.ops); const l = rr.comparison[0].id; for (const [s, p, f, d] of [[sup.voltline, 372, 6, 10], [sup.apex, 391, 4, 7]] as const) await call(`/rfqs/${rfq1.id}/quotes`, U.ops, { supplierId: s, lines: [{ rfqLineId: l, unitPrice: p, freightPerUnit: f, leadTimeDays: d, uom: 'M' }] }); await call(`/rfqs/${rfq1.id}/close`, U.ops, {}); }
@@ -161,20 +161,19 @@ export async function seedDemo(base: string, adminDbUrl: string, deps: { outbox:
   // R6 — Resources (second ERP server): ProcMart direct supply + PPE on QRC
   r = await order('requester3', plantId('RCW1'), [{ item: 'gear220', qty: 8, needBy: '2026-11-28' }, { item: 'glovn', qty: 120 }]);
   { const st = streamOf(r, 'procmart'), ln = lineOf(r, 'gear220').id; await sim(plantproc, st.id, 'po_released'); await portal('procmart', st.id, 'acknowledge', { lines: [{ lineId: ln, qty: 8, date: '2026-11-22' }] }); await portal('procmart', st.id, 'dispatch', { lines: [{ lineId: ln, qty: 8 }], carrier: 'ProcMart Logistics (demo)', trackingRef: 'PM-5521', expectedDate: '2026-11-21' }); }
-  // R7 — below the contract minimum → returned (visible, explained) + a supplier that declines
+  // R7 — below the contract minimum → ProcMart sources it instead + a supplier that declines
   r = await order('requester', plantId('CPP1'), [{ item: 'mcb16', qty: 2 }]);
   r = await order('central', plantId('NPP2'), [{ item: 'b30208', qty: 6 }]);
   { const st = streamOf(r, 'shree'), ln = lineOf(r, 'b30208').id; await sim(plantproc, st.id, 'po_released'); await portal('shree', st.id, 'acknowledge', { lines: [{ lineId: ln, qty: 0, note: 'Out of stock until January' }] }); }
   // R8 — high utilisation on the hose ARC
   r = await order('central', plantId('NPP2'), [{ item: 'h34', qty: 10 }]);
 
-  // Scenario 2: a coverage request waiting for procurement; Scenario 5: a non-catalogue request already in sourcing
-  { const p = await call(`/products/${idOf.b30208}?plantId=${plantId('RCW1')}`, U.requester3); const e = p.source.elsewhere[0]; await call('/coverage-requests', U.requester3, { itemId: idOf.b30208, plantId: plantId('RCW1'), contractId: e.contractId, note: 'Our crusher line uses this bearing; can the Power contract be extended to Ridge Cement Works?' }); }
+  // A non-catalogue request already with ProcMart (ARCs are group-level, so there are no plant coverage requests)
   { const nc = await call('/cart/non-catalogue', U.requester2, { plantId: plantId('HT01'), name: 'Anti-vibration rubber mounts 40 × 40 mm', brand: 'Any equivalent', spec: 'M8 stud, shore 60, for conveyor drive frame', reason: 'Replacing worn mounts on crane drive', qty: 24, uom: 'EA', needBy: '2026-12-20' }); const cart = await call(`/cart?plantId=${plantId('HT01')}`, U.requester2); await call(`/cart/${cart.cartId}/submit`, U.requester2, {}); void nc; }
 
-  // MAIN AGENTIC SCENARIO (simulated): 500 bearings at Ridge Cement Works; group ARC exists elsewhere, applicability unconfirmed.
+  // MAIN AGENTIC SCENARIO (simulated): 500 FAG bearings at Ridge Cement Works; no group ARC covers them, so ProcMart collects quotations.
   let scen = '';
-  { const pl = plantId('RCW1'); await call('/cart/items', U.requester3, { plantId: pl, itemId: idOf.b30208, qty: 500, intent: 'source', note: 'Need 500 for the crusher line overhaul. A group ARC exists at other plants; please confirm whether we can use it and collect quotations.' });
+  { const pl = plantId('RCW1'); await call('/cart/items', U.requester3, { plantId: pl, itemId: idOf.b6205f, qty: 500, intent: 'source', note: 'Need 500 for the crusher line overhaul.' });
     const cart = await call(`/cart?plantId=${pl}`, U.requester3); const sub = await call(`/cart/${cart.cartId}/submit`, U.requester3, {}); scen = sub.requirementId;
     await call(`/requirements/${scen}/demo/advance`, U.central, {}); await call(`/requirements/${scen}/demo/advance`, U.central, {}); }
 
