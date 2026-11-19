@@ -24,7 +24,7 @@ export class FollowUpService implements OnModuleInit, OnModuleDestroy {
   private log = new Logger('followups'); private timer?: NodeJS.Timeout;
   provider: CommsProvider = new SimulatedComms();
   constructor(private db: Db) {}
-  onModuleInit() { if (process.env.OUTBOX_WORKER !== 'off') this.timer = setInterval(() => this.scan().catch((e) => this.log.error(e.message)), 60_000); }
+  onModuleInit() { if (process.env.OUTBOX_WORKER !== 'off' && !process.env.VERCEL) this.timer = setInterval(() => this.scan().catch((e) => this.log.error(e.message)), 60_000); }
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
 
   async scan(now = new Date()): Promise<{ sent: number; failed: number; escalated: number }> {

@@ -85,7 +85,7 @@ export function routeLine(i: RouteInput): Decision {
   }
   for (const c of chosen) {
     const why: string[] = [];
-    if (c.netPrice === null) why.push('no price');
+    // A real ARC keeps its rate in SAP; MonoSource may not have it. The order still goes to the ARC (PO priced in SAP).
     if (!c.supplierId) why.push('no supplier');
     if (c.uom !== line.uom) why.push('uom differs');
     if (c.moq !== null && line.qty < c.moq) why.push(`below MOQ ${c.moq}`);
@@ -97,7 +97,7 @@ export function routeLine(i: RouteInput): Decision {
     else if (c.vendorCodeMissing) { vendorBlocked.push(c); trace.push({ step: 'arc-eligibility', outcome: 'rejected', detail: { contractLineId: c.contractLineId, why: ['supplier has no vendor code on this plant’s ERP'] } }); }
     else eligible.push(c);
   }
-  eligible.sort((a, b) => a.scopeDepth - b.scopeDepth || (a.netPrice! - b.netPrice!) || String(a.validTo).localeCompare(String(b.validTo)));
+  eligible.sort((a, b) => a.scopeDepth - b.scopeDepth || ((a.netPrice ?? Infinity) - (b.netPrice ?? Infinity) || 0) || String(a.validTo).localeCompare(String(b.validTo)));
 
   if (eligible.length) {
     const top = eligible[0];

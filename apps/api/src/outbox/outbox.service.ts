@@ -15,7 +15,7 @@ export class OutboxService implements OnModuleInit, OnModuleDestroy {
   constructor(private db: Db) {}
 
   onModuleInit() {
-    if (process.env.OUTBOX_WORKER === 'off') return;
+    if (process.env.OUTBOX_WORKER === 'off' || process.env.VERCEL) return;   // serverless: /cron/tick does this
     this.timer = setInterval(() => this.runOnce().catch((e) => this.log.error(e.message)), 1000);
   }
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }

@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test';
 process.env.OUTBOX_WORKER = 'off';
-process.env.DATABASE_ADMIN_URL = 'postgres://localhost:5432/monosource_test';
-process.env.DATABASE_URL = 'postgres://monosource_app:monosource_app_dev@localhost:5432/monosource_test';
+process.env.DATABASE_ADMIN_URL = 'postgres://postgres@localhost:54322/monosource_test';
+process.env.DATABASE_URL = 'postgres://monosource_app:monosource_app_dev@localhost:54322/monosource_test';
 process.env.STORAGE_DIR = require('os').tmpdir() + '/monosource-test-storage';
 process.env.RATE_LIMIT = '100000';
 delete process.env.ANTHROPIC_API_KEY;
@@ -172,9 +172,9 @@ describe('Phase 2–3 gaps: Excel/PDF extraction, equivalents, assets, versions,
     const t1 = await ask({ text: 'I need a ball bearing', plantId: plant });
     expect(t1.question).toMatchObject({ key: 'bore', required: true, label: 'Bore (mm)' }); expect(t1.question.options.map((o: any) => o.value).sort()).toEqual(['25', '30']); expect(t1.total).toBe(4);
     const t2 = await ask({ text: 'ball bearing for a 25 mm shaft', plantId: plant });
-    expect(t2.answers.bore).toEqual({ value: '25', source: 'your text' }); expect(t2.question.key).toBe('seal'); expect(t2.total).toBe(3);
+    expect(t2.answers.bore).toMatchObject({ value: '25', source: 'your text' }); expect(t2.question.key).toBe('seal'); expect(t2.total).toBe(3);
     const t3 = await ask({ text: 'ball bearing for a 25 mm shaft', plantId: plant, answers: { seal: 'sealed' } });
-    expect(t3.answers.seal.source).toBe('you'); expect(t3.candidates.find((c: any) => c.name.endsWith('generic')).unknownSpecs).toEqual(['seal']); // spec not recorded → flagged, not dropped; expect(t3.candidates.map((c: any) => c.name)).toEqual(expect.arrayContaining(['Ball bearing 6205 sealed']));
+    expect(t3.answers.seal.source).toBe('you'); expect(t3.candidates.find((c: any) => c.name.endsWith('generic')).unknownSpecs).toEqual(['Seal type']); // spec not recorded → flagged, not dropped; expect(t3.candidates.map((c: any) => c.name)).toEqual(expect.arrayContaining(['Ball bearing 6205 sealed']));
     const sealed = t3.candidates.find((c: any) => c.name === 'Ball bearing 6205 sealed');
     expect(sealed.contractCoverage[0]).toMatchObject({ contractNumber: 'ARC-D' }); expect(sealed.routing).toMatchObject({ route: 'arc', model: 2 });
     const open = (await ask({ text: 'ball bearing 25 mm', plantId: plant, answers: { seal: 'open' } })).candidates.find((c: any) => c.name.endsWith('open'));

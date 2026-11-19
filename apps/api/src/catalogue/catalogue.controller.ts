@@ -11,6 +11,7 @@ import { Matches } from 'class-validator';
 import { audit, canAtNode, CurrentCtx, Ctx, Perm } from '../common/security';
 import { applicableLines } from '../contracts/coverage';
 import { computeSources, SourceView } from './source';
+import { searchCatalogue } from './search';
 import { routeLines, vendorCodeSet } from '../buying/buying.controller';
 
 
@@ -138,17 +139,12 @@ export class CatalogueController {
     return this.db.tx(ctx, async (c) => {
       if (plantId && !(await canAtNode(c, ctx, 'catalogue:read', plantId))) throw new BadRequestException('Plant not in your scope');
       const term = q.trim();
-      const items = term
-        ? (await c.query(
-            `SELECT i.*, GREATEST(ts_rank(search, to_tsquery('simple', $2)), similarity(name,$1)) AS rank,
-                    (SELECT coalesce(json_agg(json_build_object('server', e.code, 'code', ic.material_code)), '[]') FROM item_erp_codes ic JOIN erp_systems e ON e.id=ic.erp_system_id WHERE ic.item_id=i.id) AS codes
-               FROM catalogue_items i
-              WHERE i.status='active' AND (search @@ to_tsquery('simple', $2) OR name % $1
-                    OR EXISTS (SELECT 1 FROM item_erp_codes ic WHERE ic.item_id=i.id AND ic.material_code = $1))
-              ORDER BY rank DESC, name LIMIT 50`,
-            [term, term.split(/\s+/).filter(Boolean).map((w) => w.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean).map((w) => w + ':*').join(' & ') || 'x'],
-          )).rows
-        : (await c.query(`SELECT i.*, '[]'::json AS codes FROM catalogue_items i WHERE status='active' ORDER BY name LIMIT 50`)).rows;
+      const ids = term ? (await searchCatalogue(c, term, { limit: 50 })).hits.map((h) => h.id) : [];
+      const rows = term
+        ? (await c.query(`SELECT i.*, (SELECT coalesce(json_agg(json_build_object('server', e.code, 'code', ic.material_code)), '[]') FROM item_erp_codes ic JOIN erp_systems e ON e.id=ic.erp_system_id WHERE ic.item_id=i.id) AS codes
+               FROM catalogue_items i WHERE i.id = ANY($1::uuid[])`, [ids])).rows
+        : (await c.query(`SELECT i.*, '[]'::json AS codes FROM catalogue_items i WHERE status='active' ORDER BY po_lines DESC, name LIMIT 50`)).rows;
+      const items = term ? ids.map((id) => rows.find((r) => r.id === id)).filter(Boolean) : rows;
       return enrichItems(c, items, plantId);
     });
   }
@@ -214,7 +210,7 @@ export class CatalogueController {
     if (!file) throw new BadRequestException('file required');
     const kind = sniffAsset(file.buffer);
     if (!kind) throw new BadRequestException('Only PNG, JPEG, WebP images and PDF documents are accepted');
-    const stored = this.storage.put(ctx.tenantId, file.buffer);
+    const stored = await this.storage.put(ctx.tenantId, file.buffer);
     return this.db.tx(ctx, async (c) => {
       if (!(await c.query(`SELECT 1 FROM catalogue_items WHERE id=$1`, [id])).rowCount) throw new NotFoundException();
       const r = (await c.query(`INSERT INTO item_assets(tenant_id,item_id,kind,filename,mime,size_bytes,sha256,storage_key,caption,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
@@ -232,7 +228,7 @@ export class CatalogueController {
     if (!a) throw new NotFoundException();
     res.setHeader('Content-Type', a.mime); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     res.setHeader('Content-Disposition', `${a.kind === 'image' ? 'inline' : 'attachment'}; filename="${a.filename}"`);
-    res.send(this.storage.get(a.storage_key));
+    res.send(await this.storage.get(a.storage_key));
   }
 
   // ───────── equivalence list (match ladder step 3) & guided-buying attributes ─────────

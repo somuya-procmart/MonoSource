@@ -1,95 +1,94 @@
-# Deploying MonoSource
+# Deploying MonoSource (Supabase + Vercel)
 
-## Current live deployment
-
-- Website: https://monosource.vercel.app (Vercel project `somuya/monosource`)
-- API: https://api-production-87e7b122.up.railway.app (Railway project `monosource`, service `api`, Postgres + volume at `/data`)
-- First sign-in: organisation ID `platform`, with the admin email and password kept in the git-ignored `.env.deploy` file of the machine that set it up.
-- The API redeploys on every push to `main` (Railway is connected to GitHub).
-- The website is **not** connected to GitHub yet: redeploy it from the repo root with `vercel deploy --prod`, or connect it once in Vercel → Project → Settings → Git (needs a GitHub login connection on the Vercel account).
-
-
-Two services and a database:
-
-| Part | Host | Why |
+| Part | Host | Notes |
 |---|---|---|
-| Web (`apps/web`, Next.js) | **Vercel** | Built for Next.js; redeploys on every push |
-| API (`apps/api`, NestJS) | **Railway** | Must stay running: the outbox (SAP, simulated) and supplier follow-ups run on timers, and uploaded files are kept on disk |
-| Postgres | **Railway Postgres** | Same project as the API, private network |
+| Web (`apps/web`, Next.js) | **Vercel** project 1 | unchanged |
+| API (`apps/api`, NestJS) | **Vercel** project 2 (serverless function) | `apps/api/vercel.json`. Migrations run on every build |
+| Postgres 17 + pgvector | **Supabase** | row-level security per tenant, as before |
+| Files (contract PDFs, product images) | **Supabase Storage**, private bucket | served only through the API |
+| Background work (outbox, supplier follow-ups) | **Supabase pg_cron** → `POST <API>/cron/tick` every minute | serverless has no timers |
 
-Config already in the repo: `railway.json` at the repo root (Railway reads it automatically: build, migrations before each deploy, start, health check) and `apps/web/vercel.json` (framework, security headers, skip builds when only the API changed).
+Railway is no longer used. If the old Railway project is still connected to GitHub, delete it (or disconnect the repo) so pushes stop deploying there.
 
-> ⚠ The SAP/ERP connection is **simulated** (`mock-sap`). A live deployment is a demo or pilot, not a system connected to SAP.
+> ⚠ SAP is **simulated** (`mock-sap`). The Adani data contains no prices and no vendor names; ARC rates are shown as "held in SAP".
 
----
+## 1. Supabase
 
-## 1. Railway: database and API
+1. Create a project (region **Mumbai, ap-south-1**). Keep the database password.
+2. Project → **Connect**: note two connection strings
+   - **Session pooler** (port 5432, user `postgres.<ref>`) → `DATABASE_ADMIN_URL` (migrations, seed, setup)
+   - **Transaction pooler** (port 6543) → used for `DATABASE_URL` below, with the app user
+3. Project → **Settings → API**: note the **Project URL** and the **service_role** key (server-side only, never in the web app).
 
-1. Create a project at railway.com → **New → Database → PostgreSQL**.
-2. **New → GitHub repo → `somuya-procmart/MonoSource`.** This is the API service.
-   - **Settings → Root Directory:** leave empty. No build or start command needed; they come from `railway.json`.
-   - If you earlier set **Config-as-code → Railway config file** to `/apps/api/railway.json`, clear it (that file has moved to the root).
-   - **Settings → Networking → Generate domain.** This is your API address, e.g. `https://monosource-api.up.railway.app`.
-3. **Volume:** right-click the API service → **Attach volume**, mount path `/data`. Uploaded contract PDFs and product images live here.
-4. **Variables** on the API service (`${{…}}` are Railway references, type them as shown):
+The API connects as `monosource_app` (created by the migrations, cannot bypass row-level security). Through the pooler its user name is `monosource_app.<ref>`:
+
+```
+DATABASE_URL=postgresql://monosource_app.<ref>:<APP_DB_PASSWORD>@aws-0-ap-south-1.pooler.supabase.com:6543/postgres
+```
+
+## 2. Vercel: API
+
+1. vercel.com → **Add New → Project →** import the repo again → **Root Directory `apps/api`**. Framework: Other (settings come from `apps/api/vercel.json`).
+2. Environment variables:
 
    | Variable | Value |
    |---|---|
    | `NODE_ENV` | `production` |
-   | `JWT_SECRET` | a long random string, e.g. output of `openssl rand -hex 32` |
-   | `APP_DB_PASSWORD` | another long random string (password of the restricted `monosource_app` database user) |
-   | `DATABASE_ADMIN_URL` | `${{Postgres.DATABASE_URL}}` |
-   | `DATABASE_URL` | `postgresql://monosource_app:${{APP_DB_PASSWORD}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}` |
-   | `STORAGE_DIR` | `/data` |
-   | `WEB_ORIGIN` | your Vercel address, e.g. `https://monosource.vercel.app` (comma-separate several; fill in after step 2 below) |
-   | `PLATFORM_ADMIN_EMAIL` | the email you will sign in with as platform admin |
-   | `PLATFORM_ADMIN_PASSWORD` | at least 12 characters |
-   | `ANTHROPIC_API_KEY` | *optional.* Turns on AI reading of contract PDFs. **The PDF text is then sent to Anthropic**, so check customer NDAs first |
+   | `JWT_SECRET` | `openssl rand -hex 32` |
+   | `APP_DB_PASSWORD` | another long random string |
+   | `DATABASE_ADMIN_URL` | Supabase session pooler URL |
+   | `DATABASE_URL` | transaction pooler URL as above |
+   | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | from step 1.3 (turns on Supabase Storage) |
+   | `CRON_SECRET` | `openssl rand -hex 32` |
+   | `WEB_ORIGIN` | the web app's address |
+   | `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` | first platform admin (12+ characters) |
+   | `LLM_API_KEY` (+ optional `LLM_BASE_URL`, `LLM_MODEL`) | *optional*: turns on the Ask MonoSource agent (see below) |
+   | `ANTHROPIC_API_KEY` | *optional*: AI reading of contract PDFs |
 
-5. Deploy. On every start the API first runs the migrations (safe to repeat), which also create the `monosource_app` user and the first platform admin. The deploy is live when `https://<api-domain>/docs` opens.
+3. Deploy. The build compiles, runs the migrations and creates the platform admin. Live when `https://<api>/docs` opens.
 
-The app connects as `monosource_app`, which cannot bypass row-level security, so one customer's data can never reach another's. Only migrations use the admin URL.
+## 3. One-time Supabase setup (bucket + cron)
 
-## 2. Vercel: web
+```bash
+DATABASE_ADMIN_URL='<session pooler URL>' API_URL='https://<api>.vercel.app' CRON_SECRET='<same as on Vercel>' npm -w apps/api run supabase:setup
+```
 
-1. vercel.com → **Add New → Project → import `somuya-procmart/MonoSource`**.
-2. **Root Directory:** `apps/web` (Vercel picks up Next.js and the npm workspace).
-3. **Environment variable:** `NEXT_PUBLIC_API_URL` = your Railway API address (no trailing slash).
-4. Deploy, then put the Vercel address into `WEB_ORIGIN` on Railway (the API only accepts browser requests from there) and redeploy the API.
+## 4. Vercel: web
 
-`NEXT_PUBLIC_API_URL` is baked in at build time: after changing it, redeploy the web app.
+Existing web project (Root Directory `apps/web`): set `NEXT_PUBLIC_API_URL` to the new API address and redeploy. Put the web address into the API's `WEB_ORIGIN`.
 
-## 3. First sign-in
+## 5. Load the real Adani data
 
-Open the Vercel address and sign in with organisation ID **`platform`** and the `PLATFORM_ADMIN_*` email and password. From there you create customer organisations and their admins.
+The workbooks never go into git. On a trusted machine:
 
-Changing `PLATFORM_ADMIN_PASSWORD` later does **not** change an existing admin's password.
+```bash
+python3 -I apps/api/scripts/adani/extract.py --bu "<Business unit wise data.xlsx>" --products "<ProcMart supporting file.xlsx>" --taxonomy "<Category Structure.xlsx>" --out apps/api/.data/adani
+DATABASE_ADMIN_URL='<session pooler URL>' npm -w apps/api run seed:adani
+```
 
-## Optional: load the demo company
+About 10 minutes. Adds `--reset` to rebuild the tenant (deletes its data). Sign-in: organisation ID `adani`; the generated accounts and passwords are written to `apps/api/.data/adani/accounts.txt` (git-ignored). This is real company data: share the URL only with people allowed to see it.
 
-The demo loader **wipes the whole database** and refills it with the fictional "demo" company. Only do this on a database that holds nothing else.
+**Supabase size:** about 400 MB with everything (items 158 MB, PO history 103 MB, ARC lines 47 MB). That fits the free tier's 500 MB, with little room to grow: move to Pro before adding more years of POs or per-item vectors.
 
-1. In Railway's Postgres service → **Settings → Networking**, enable the public TCP proxy; note the public host and port.
-2. On your machine, from the repo root:
+## Ask MonoSource agent (optional)
 
-   ```bash
-   DATABASE_ADMIN_URL='postgresql://postgres:<password>@<public-host>:<port>/railway' \
-   DATABASE_URL='postgresql://monosource_app:<APP_DB_PASSWORD>@<public-host>:<port>/railway' \
-   npm run -w apps/api demo
-   ```
+Without an LLM key, Ask is the guided search (no AI; nothing leaves your servers). With one, Ask becomes an agent that calls the catalogue/ARC tools. Any OpenAI-compatible provider works:
 
-3. Redeploy the API, so your `PLATFORM_ADMIN_*` admin is created again.
-4. **Security:** the demo accounts' passwords are written in the README, and the loader also creates `platform@monosource.local` with a development password. Anyone with your URL could sign in with them. Switch that admin off right away (Railway → Postgres → **Data → Query**):
+| Provider | `LLM_BASE_URL` | example `LLM_MODEL` | Data note |
+|---|---|---|---|
+| Google Gemini (default) | *(leave empty)* | `gemini-2.5-flash` | free tier may use data to improve Google products: use a billed key for real data |
+| Groq | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` | open-weight model, fast, free tier |
+| OpenRouter | `https://openrouter.ai/api/v1` | any tool-calling model | check each model's data policy |
+| Ollama (self-hosted) | `http://<host>:11434/v1` | `qwen3:8b` | nothing leaves your network |
 
-   ```sql
-   UPDATE users SET status = 'disabled' WHERE email = 'platform@monosource.local';
-   ```
+The user's messages and the matching catalogue/ARC rows are sent to the provider you choose.
 
-   For anything beyond a short demo, don't load the demo data at all.
+## MCP server (Claude Desktop, Claude Code, other agents)
 
-## After going live
+`<API>/mcp` (Streamable HTTP). Get a 30-day read-only token while signed in: `POST <API>/auth/mcp-token`. Then, e.g. Claude Code:
 
-- Every push to `main` redeploys both. Vercel skips the web build when only the API changed.
-- New migrations run when the new API version starts. If one fails, that version doesn't start and Railway keeps the previous one serving.
-- The API allows 600 requests a minute per client by default (`RATE_LIMIT` to change).
-- Not built yet: cloud file storage (files live on the Railway volume, so back it up), a real SAP connection, email/WhatsApp sending (previews only).
+```bash
+claude mcp add --transport http monosource https://<api>.vercel.app/mcp --header "Authorization: Bearer <token>"
+```
+
+Tools: `search_products`, `get_product`, `find_arcs`, `browse_taxonomy`, `get_product_type`, `purchase_history`, `list_plants`, `catalogue_overview`.

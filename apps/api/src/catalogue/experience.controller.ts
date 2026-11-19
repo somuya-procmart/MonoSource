@@ -5,6 +5,9 @@ import { Db } from '../db/db';
 import { audit, canAtNode, CurrentCtx, Ctx, hasPerm, Perm, visibleNodeIds } from '../common/security';
 import { compactSource, enrichItems } from './catalogue.controller';
 import { computeSources, suggestSimilar } from './source';
+import { searchCatalogue } from './search';
+
+const title = (s: string) => s.toLowerCase().replace(/\b[a-z]/g, (m) => m.toUpperCase()).replace(/\b(Mcb|Mccb|Rccb|Elcb|Led|Ups|Plc|Vfd|Hmi|Smps|Hrc|Lt|Ht|Ac|Dc|Pvc|Xlpe)\b/g, (m) => m.toUpperCase());
 import { applicableLines } from '../contracts/coverage';
 import { routeLines } from '../buying/buying.controller';
 import { lineQuantities } from '../buying/orders.controller';
@@ -30,19 +33,12 @@ export class ExperienceController {
       if (q.plantId && !(await canAtNode(c, ctx, 'catalogue:read', q.plantId))) throw new BadRequestException('Plant not in your scope');
       const term = (q.q ?? '').trim();
       const likes = term.toLowerCase().split(/\s+/).map((w) => w.replace(/[%_\\]/g, '')).filter(Boolean).map((w) => `%${w}%`); if (!likes.length) likes.push('%');
-      const tsq = term.split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean).map((w) => w + ':*').join(' & ');
+      const found = term && !ids.length ? await searchCatalogue(c, term, { limit: 120 }) : null;
       const rows = ids.length
         ? (await c.query(`SELECT i.* FROM catalogue_items i WHERE i.status='active' AND i.id = ANY($1::uuid[])`, [ids])).rows
-        : term
-          ? (await c.query(
-              `SELECT i.*, GREATEST(ts_rank(search, to_tsquery('simple', $2)), similarity(name,$1)) AS rank FROM catalogue_items i
-                WHERE i.status='active' AND (search @@ to_tsquery('simple', $2) OR name % $1 OR lower(i.category) = lower($1) OR lower(i.brand) = lower($1)
-                      OR EXISTS (SELECT 1 FROM item_erp_codes ic WHERE ic.item_id=i.id AND ic.material_code = $1)
-                      OR EXISTS (SELECT 1 FROM jsonb_each_text(i.specs) e WHERE lower(e.value) = lower($1))
-                      OR EXISTS (SELECT 1 FROM item_aliases a WHERE a.item_id=i.id AND lower(a.value) LIKE ALL($3::text[]))
-                      OR EXISTS (SELECT 1 FROM contract_lines cl WHERE cl.item_id=i.id AND cl.status='published' AND (lower(cl.description) LIKE ALL($3::text[]) OR lower(cl.supplier_item_code) = lower($1))))
-                ORDER BY rank DESC, name LIMIT 300`, [term, tsq || 'x', likes])).rows
-          : (await c.query(`SELECT i.* FROM catalogue_items i WHERE i.status='active' ORDER BY name LIMIT 300`)).rows;
+        : found
+          ? await (async () => { const r = (await c.query(`SELECT i.* FROM catalogue_items i WHERE i.id = ANY($1::uuid[])`, [found.hits.map((h) => h.id)])).rows; return found.hits.map((h) => r.find((x) => x.id === h.id)).filter(Boolean); })()
+          : (await c.query(`SELECT i.* FROM catalogue_items i WHERE i.status='active' ORDER BY po_lines DESC, name LIMIT 80`)).rows;
       const codes = rows.length ? (await c.query(`SELECT ic.item_id, e.code AS server, ic.material_code AS code FROM item_erp_codes ic JOIN erp_systems e ON e.id=ic.erp_system_id WHERE ic.item_id = ANY($1::uuid[])`, [rows.map((r) => r.id)])).rows : [];
       const saved = new Set((await c.query(`SELECT item_id FROM saved_items WHERE user_id=$1`, [ctx.userId])).rows.map((r) => r.item_id));
       const matched = new Map<string, { kind: string; value: string; supplier?: string }>();
@@ -68,7 +64,8 @@ export class ExperienceController {
       if (q.sort === 'price_asc') out = [...out].sort((a, b) => (a.lowestPrice ?? 1e18) - (b.lowestPrice ?? 1e18));
       else if (q.sort === 'price_desc') out = [...out].sort((a, b) => (b.lowestPrice ?? -1) - (a.lowestPrice ?? -1));
       else if (q.sort === 'name') out = [...out].sort((a, b) => a.name.localeCompare(b.name));
-      return { total: out.length, items: out.slice(0, 80), facets };
+      const types = found?.types.map(({ id, name, category, count, score }) => ({ id, name: title(name), category, count, score })) ?? [];
+      return { total: found ? Math.max(found.total, out.length) : out.length, items: out.slice(0, 80), facets: { ...facets, types }, understood: found ? { head: found.understanding.head, categoryHint: found.understanding.categoryHint, semantic: found.understanding.semantic } : null };
     });
   }
 
@@ -98,7 +95,7 @@ export class ExperienceController {
         appliesToPlant: applicable ? applicable.has(r.contractLineId) : null,
         orderable: applicable ? applicable.has(r.contractLineId) && (vendorOk ? vendorOk.has(r.supplierId) : true) : null,
         blockedReason: applicable && !applicable.has(r.contractLineId) ? 'This contract does not cover your plant' : applicable && vendorOk && !vendorOk.has(r.supplierId) ? 'Supplier has no vendor code on your plant’s ERP yet' : null,
-      })).sort((a, b) => Number(b.orderable === true) - Number(a.orderable === true) || (a.netPrice - b.netPrice));
+      })).sort((a, b) => Number(b.orderable === true) - Number(a.orderable === true) || (((a.netPrice ?? Infinity) - (b.netPrice ?? Infinity)) || 0));
       const [routingItem] = await enrichItems(c, [{ ...it }], plantId || null);
       const codes = (await c.query(`SELECT e.code AS server, ic.material_code AS code FROM item_erp_codes ic JOIN erp_systems e ON e.id=ic.erp_system_id WHERE ic.item_id=$1`, [id])).rows;
       const equivalents = (await c.query(`SELECT e.code AS server, q.material_code AS code, q.note FROM material_equivalents q JOIN erp_systems e ON e.id=q.erp_system_id WHERE q.item_id=$1`, [id])).rows;

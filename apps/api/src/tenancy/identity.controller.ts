@@ -54,6 +54,14 @@ export class IdentityController {
     return { token };
   }
 
+  /** A 30-day token for MCP clients (Claude Desktop, Claude Code…). Read-only: it only opens /mcp. */
+  @Post('auth/mcp-token')
+  async mcpToken(@CurrentCtx() ctx: Ctx) {
+    const token = await this.jwt.signAsync({ sub: ctx.userId, tid: ctx.tenantId, plat: false, scope: 'mcp' }, { expiresIn: '30d' });
+    await this.db.tx(ctx, (c) => audit(c, ctx, 'auth.mcp_token', 'user', ctx.userId));
+    return { token, expiresInDays: 30, endpoint: '/mcp' };
+  }
+
   @Get('me')
   async me(@CurrentCtx() ctx: Ctx) {
     return this.db.tx(ctx, async (c) => {

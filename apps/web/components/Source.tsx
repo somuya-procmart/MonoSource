@@ -21,7 +21,7 @@ export function SourceBadge({ src, plant, compact }: { src: any; plant?: boolean
 export function SourceSummary({ it, plant }: { it: any; plant: boolean; plantName?: string }) {
   const s = it.source; if (!s) return null;
   if (!plant) return <div className="mut" style={{ fontSize: 13 }}>Pick a plant for price</div>;
-  if (s.case === 'A') return <div><div style={{ marginBottom: 4 }}><SourceBadge src={s} plant /></div><div className="price">{s.multiple && <small>from </small>}{price(s.lowestPrice)}<small> / {it.uom}</small></div>
+  if (s.case === 'A') return <div><div style={{ marginBottom: 4 }}><SourceBadge src={s} plant /></div>{s.lowestPrice == null ? <div className="psub">Rate as per ARC in SAP</div> : <div className="price">{s.multiple && <small>from </small>}{price(s.lowestPrice)}<small> / {it.uom}</small></div>}
     <div className="psub">{s.multiple ? `${s.supplies[0].supplier} +${s.supplies.length - 1}` : s.supplies[0].supplier}</div></div>;
   return <div><div style={{ marginBottom: 4 }}><SourceBadge src={s} plant /></div><div className="psub">Price on quote</div></div>;
 }

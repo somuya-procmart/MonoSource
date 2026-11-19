@@ -11,3 +11,9 @@ apps/web/shots/
 *.tsbuildinfo
 .DS_Store
 .vercel
+
+# real customer data (never commit)
+.data/
+apps/api/.data/
+.models/
+apps/api/.models/

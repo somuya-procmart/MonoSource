@@ -9,8 +9,8 @@ export interface TxScope {
   platform?: boolean;
 }
 
-export const DEFAULT_APP_URL = 'postgres://monosource_app:monosource_app_dev@localhost:5432/monosource';
-export const DEFAULT_ADMIN_URL = 'postgres://localhost:5432/monosource';
+export const DEFAULT_APP_URL = 'postgres://monosource_app:monosource_app_dev@localhost:54322/monosource';
+export const DEFAULT_ADMIN_URL = 'postgres://postgres@localhost:54322/monosource';
 
 /**
  * All data access goes through tx(). It opens a transaction and sets the tenant
@@ -18,7 +18,7 @@ export const DEFAULT_ADMIN_URL = 'postgres://localhost:5432/monosource';
  */
 @Injectable()
 export class Db implements OnModuleDestroy {
-  readonly pool = new Pool({ connectionString: process.env.DATABASE_URL || DEFAULT_APP_URL, max: 10 });
+  readonly pool = new Pool({ connectionString: process.env.DATABASE_URL || DEFAULT_APP_URL, max: Number(process.env.PG_POOL_MAX || (process.env.VERCEL ? 3 : 10)) });
 
   async tx<T>(scope: TxScope, fn: (c: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
