@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'crypto';
 import { Public } from '../common/security';
 import { OutboxService } from '../outbox/outbox.service';
 import { FollowUpService } from '../buying/followups.service';
+import { embedQuery } from '../catalogue/embed';
 
 /**
  * Background work for serverless hosting (Vercel), where in-process timers do not run between requests.
@@ -25,6 +26,7 @@ export class CronController {
     const until = Date.now() + 20_000; let jobs = 0, n = 0;
     do { n = await this.outbox.runOnce(25); jobs += n; } while (n > 0 && Date.now() < until);
     const followUps = await this.followups.scan();
+    await embedQuery('warm up');   // keeps the embedding model loaded on this instance, so searches skip a ~2 s cold start
     return { jobs, followUps };
   }
 }

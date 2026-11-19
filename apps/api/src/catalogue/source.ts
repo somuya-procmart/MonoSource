@@ -55,8 +55,11 @@ export async function computeSources(c: PoolClient, itemIds: string[], plantId: 
   const approved = (await c.query(`SELECT item_id, alternative_item_id FROM item_alternatives WHERE item_id = ANY($1::uuid[]) OR alternative_item_id = ANY($1::uuid[])`, [itemIds])).rows;
   // Only items of the same product type that record at least two specs can be suggested as alternatives.
   const withSpecs = items.filter((i) => Object.keys(i.specs ?? {}).length >= 2);
-  const sameCat = withSpecs.length ? (await c.query(`SELECT id, coalesce(product_type_id::text, category) AS category, specs FROM catalogue_items
-      WHERE status='active' AND coalesce(product_type_id::text, category) = ANY($1::text[]) AND specs <> '{}'::jsonb LIMIT 5000`, [[...new Set(withSpecs.map((i) => i.category))]])).rows : [];
+  const isUuid = (x: string) => /^[0-9a-f-]{36}$/.test(x);
+  const kinds = [...new Set(withSpecs.map((i) => i.category as string))];
+  const sameCat = kinds.length ? (await c.query(`SELECT id, coalesce(product_type_id::text, category) AS category, specs FROM catalogue_items
+      WHERE status='active' AND specs <> '{}'::jsonb AND (product_type_id = ANY($1::uuid[]) OR (product_type_id IS NULL AND category = ANY($2::text[]))) LIMIT 5000`,
+      [kinds.filter(isUuid), kinds.filter((k) => !isUuid(k))])).rows : [];
 
   for (const it of items) {
     const mine = rows.filter((r) => r.item_id === it.id).map((r): Supply => ({

@@ -35,13 +35,14 @@ export const clearTaxonomyCache = () => taxCache.clear();
 export interface SearchOptions { limit?: number; typeIds?: string[]; semantic?: boolean }
 export interface SearchHit { id: string; score: number; nodeId: string | null; why: string[] }
 export interface TypeMatch { id: string; name: string; path: string; category: string; score: number; via: 'words' | 'meaning' | 'both'; count: number }
-export interface SearchResult { understanding: QueryUnderstanding & { semantic: boolean }; types: TypeMatch[]; hits: SearchHit[]; total: number }
+export interface SearchResult { understanding: QueryUnderstanding & { semantic: boolean }; types: TypeMatch[]; hits: SearchHit[]; total: number; timings: Record<string, number> }
 
 const tsTerm = (w: string) => w.replace(/[^\p{L}\p{N}]/gu, '');
 
 export async function searchCatalogue(c: PoolClient, text: string, o: SearchOptions = {}): Promise<SearchResult> {
   const limit = o.limit ?? 50;
-  const tax = await taxonomyFor(c);
+  const T: Record<string, number> = {}; let t0 = Date.now(); const mark = (k: string) => { T[k] = Date.now() - t0; t0 = Date.now(); };
+  const tax = await taxonomyFor(c); mark('taxonomy');
   const u = understandQuery(tax.idx, text, tax.categories);
   const typeScores = new Map(u.typeScores);
   const via = new Map<string, 'words' | 'meaning' | 'both'>([...typeScores.keys()].map((k) => [k, 'words']));
@@ -50,7 +51,7 @@ export async function searchCatalogue(c: PoolClient, text: string, o: SearchOpti
   let semantic = false;
   const looksLikeCode = u.words.length > 0 && u.words.every((w) => /\d/.test(w));
   if (o.semantic !== false && !looksLikeCode && u.words.length) {
-    const qv = await embedQuery(text);
+    const qv = await embedQuery(text); mark('embed');
     if (qv) {
       semantic = true;
       const near = (await c.query(`SELECT id, 1 - (embedding <=> $1::vector) AS sim FROM taxonomy_nodes WHERE level='product_type' AND embedding IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 15`, [toPgVector(qv)])).rows as { id: string; sim: number }[];
@@ -76,6 +77,7 @@ export async function searchCatalogue(c: PoolClient, text: string, o: SearchOpti
   const nodeScore = new Map(typeScores);
   for (const [id, s] of typeScores) { const ch = tax.childOf.get(id); if (ch) nodeScore.set(ch, Math.max(nodeScore.get(ch) ?? 0, s * 0.6)); }
 
+  mark('types');
   const content = contentWords(u.words);
   const terms = [...new Set(content.map(tsTerm).filter((w) => w.length >= 2))];
   const andQ = terms.length ? terms.map((w) => `${w}:*`).join(' & ') : null;
@@ -84,25 +86,14 @@ export async function searchCatalogue(c: PoolClient, text: string, o: SearchOpti
   const likes = text.toLowerCase().split(/\s+/).map((w) => w.replace(/[%_\\]/g, '')).filter((w) => w.length >= 2).map((w) => `%${w}%`);
   const nodeIds = [...nodeScore.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([k]) => k);
 
+  // Candidate ids come from ms_search_candidates (migration 010): indexed lookups that RLS would otherwise turn into full scans.
   const cand = (await c.query(
-    `WITH q AS (SELECT CASE WHEN $2::text IS NULL THEN NULL ELSE to_tsquery('simple', $2) END AS a, CASE WHEN $3::text IS NULL THEN NULL ELSE to_tsquery('simple', $3) END AS o)
+    `WITH q AS (SELECT CASE WHEN $2::text IS NULL THEN NULL ELSE to_tsquery('simple', $2) END AS o), f AS (SELECT * FROM ms_search_candidates($1::uuid[], $3, $2, $4, $5, $6, $7, $8))
      SELECT i.id, i.name, i.keywords, i.brand, i.mpn, left(i.description, 400) AS description, i.product_type_id, i.po_lines, i.plant_count, i.category,
-            CASE WHEN q.o IS NULL THEN 0 ELSE ts_rank(i.search, q.o) END AS rank,
-            EXISTS (SELECT 1 FROM item_erp_codes ic WHERE ic.item_id=i.id AND lower(ic.material_code) = ANY($4)) AS code_hit
-       FROM catalogue_items i, q
-      WHERE i.status='active' AND i.id IN (
-        (SELECT id FROM catalogue_items x WHERE x.status='active' AND x.product_type_id = ANY($1::uuid[])
-           ORDER BY (CASE WHEN (SELECT o FROM q) IS NULL THEN 0 ELSE ts_rank(x.search, (SELECT o FROM q)) END) DESC, x.po_lines DESC LIMIT 600)
-        UNION (SELECT id FROM catalogue_items x WHERE $2::text IS NOT NULL AND x.search @@ (SELECT a FROM q) ORDER BY x.po_lines DESC LIMIT 400)
-        UNION (SELECT item_id FROM item_erp_codes WHERE lower(material_code) = ANY($4))
-        UNION (SELECT id FROM catalogue_items x WHERE cardinality($4::text[]) > 0 AND lower(x.mpn) = ANY($4))
-        UNION (SELECT id FROM catalogue_items x WHERE cardinality($4::text[]) > 0 AND x.search @@ to_tsquery('simple', array_to_string(array(SELECT regexp_replace(c, '[^a-z0-9]', '', 'g') || ':*' FROM unnest($4::text[]) c), ' | ')) LIMIT 200)
-        UNION (SELECT id FROM catalogue_items x WHERE $5 AND x.search @@ (SELECT o FROM q) ORDER BY ts_rank(x.search, (SELECT o FROM q)) DESC LIMIT 300)
-        UNION (SELECT id FROM catalogue_items x WHERE $6 AND x.name % $7 ORDER BY similarity(x.name, $7) DESC LIMIT 40)
-        UNION (SELECT a.item_id FROM item_aliases a WHERE cardinality($8::text[]) > 0 AND lower(a.value) LIKE ALL($8::text[]) LIMIT 100)
-        UNION (SELECT cl.item_id FROM contract_lines cl WHERE cl.item_id IS NOT NULL AND cl.status='published' AND cardinality($8::text[]) > 0
-                 AND (lower(cl.description) LIKE ALL($8::text[]) OR lower(cl.supplier_item_code) = lower($7)) LIMIT 100))`,
-    [nodeIds, andQ, orQ, codes, nodeIds.length === 0, text.length >= 4 && text.length <= 60, text, likes])).rows;
+            CASE WHEN q.o IS NULL THEN 0 ELSE ts_rank(i.search, q.o) END AS rank, f.code_hit
+       FROM f JOIN catalogue_items i ON i.id = f.id, q WHERE i.status = 'active'`,
+    [nodeIds, orQ, andQ, codes, nodeIds.length === 0, text.length >= 4 && text.length <= 60, text, likes])).rows;
+  mark('candidates');
   // Items found through an alias or a contract line: what people call it there counts as the item's own words.
   const viaAlias = new Map<string, string>(cand.length ? (await c.query(
     `SELECT item_id, string_agg(lower(value), ' ') v FROM item_aliases WHERE item_id = ANY($1::uuid[]) GROUP BY 1
@@ -137,5 +128,6 @@ export async function searchCatalogue(c: PoolClient, text: string, o: SearchOpti
   for (const h of hits) if (h.nodeId && typeScores.has(h.nodeId)) counts.set(h.nodeId, (counts.get(h.nodeId) ?? 0) + 1);
   const types: TypeMatch[] = [...typeScores].filter(([id]) => counts.get(id)).sort((a, b) => b[1] - a[1] || (counts.get(b[0])! - counts.get(a[0])!)).slice(0, 12)
     .map(([id, score]) => ({ id, name: tax.nodes.get(id)!.name, path: tax.nodes.get(id)!.path, category: tax.nodes.get(id)!.category, score: Math.round(score * 100) / 100, via: via.get(id) ?? 'words', count: counts.get(id)! }));
-  return { understanding: { ...u, semantic }, types, hits: hits.slice(0, Math.max(limit, 1)), total: hits.length };
+  mark('rank');
+  return { understanding: { ...u, semantic }, types, hits: hits.slice(0, Math.max(limit, 1)), total: hits.length, timings: T };
 }

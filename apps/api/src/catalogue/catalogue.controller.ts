@@ -134,18 +134,20 @@ export class CatalogueController {
   /** Search items; with plantId, each hit carries the contract coverage that applies to *that* plant only. */
   @Perm('catalogue:read')
   @Get('search')
-  async search(@CurrentCtx() ctx: Ctx, @Query('q') q = '', @Query('plantId') plantId?: string) {
+  async search(@CurrentCtx() ctx: Ctx, @Query('q') q = '', @Query('plantId') plantId?: string, @Res({ passthrough: true }) res?: Response) {
     if (plantId && !/^[0-9a-f-]{36}$/.test(plantId)) throw new BadRequestException('bad plantId');
     return this.db.tx(ctx, async (c) => {
       if (plantId && !(await canAtNode(c, ctx, 'catalogue:read', plantId))) throw new BadRequestException('Plant not in your scope');
       const term = q.trim();
-      const ids = term ? (await searchCatalogue(c, term, { limit: 50 })).hits.map((h) => h.id) : [];
+      const t0 = Date.now(); const found = term ? await searchCatalogue(c, term, { limit: 50 }) : null; const ids = found ? found.hits.map((h) => h.id) : [];
+      const timing = (extra: Record<string, number>) => res?.setHeader('Server-Timing', Object.entries({ ...(found?.timings ?? {}), ...extra }).map(([k, v]) => `${k};dur=${v}`).join(', '));
+      const tSearch = Date.now() - t0;
       const rows = term
         ? (await c.query(`SELECT i.*, (SELECT coalesce(json_agg(json_build_object('server', e.code, 'code', ic.material_code)), '[]') FROM item_erp_codes ic JOIN erp_systems e ON e.id=ic.erp_system_id WHERE ic.item_id=i.id) AS codes
                FROM catalogue_items i WHERE i.id = ANY($1::uuid[])`, [ids])).rows
         : (await c.query(`SELECT i.*, '[]'::json AS codes FROM catalogue_items i WHERE status='active' ORDER BY po_lines DESC, name LIMIT 50`)).rows;
       const items = term ? ids.map((id) => rows.find((r) => r.id === id)).filter(Boolean) : rows;
-      return enrichItems(c, items, plantId);
+      const t1 = Date.now(); const out = await enrichItems(c, items, plantId); timing({ search: tSearch, enrich: Date.now() - t1 }); return out;
     });
   }
 

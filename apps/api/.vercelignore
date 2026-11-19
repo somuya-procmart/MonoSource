@@ -1,0 +1,8 @@
+# Never upload real customer data, model caches, local files or build output
+.data
+.models
+.storage
+dist
+node_modules
+test
+.env*
