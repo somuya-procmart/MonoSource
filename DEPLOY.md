@@ -23,8 +23,10 @@ Railway is no longer used. If the old Railway project is still connected to GitH
 The API connects as `monosource_app` (created by the migrations, cannot bypass row-level security). Through the pooler its user name is `monosource_app.<ref>`:
 
 ```
-DATABASE_URL=postgresql://monosource_app.<ref>:<APP_DB_PASSWORD>@aws-0-ap-south-1.pooler.supabase.com:6543/postgres
+DATABASE_URL=postgresql://monosource_app.<ref>:<APP_DB_PASSWORD>@aws-1-ap-south-1.pooler.supabase.com:6543/postgres?uselibpqcompat=true&sslmode=require
 ```
+
+Use the pooler host shown under **Connect** (it can be `aws-0-…` or `aws-1-…`). Add `?uselibpqcompat=true&sslmode=require` to both URLs: the Node driver otherwise tries to verify Supabase's own certificate authority and refuses to connect.
 
 ## 2. Vercel: API
 
