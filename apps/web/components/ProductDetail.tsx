@@ -7,7 +7,7 @@ import { Icon, categoryIcon } from './Icon';
 import { AuthImage } from './AuthImage';
 import { Heart, Qty } from './ProductBits';
 import { Thumb } from './Thumb';
-import { SourceBadge } from './Source';
+import { SourceBadge, pmPrice } from './Source';
 import { SupplierDrawer } from './SupplierDrawer';
 import { dmy, inr, num, price } from '../lib/format';
 import { useOpenProduct } from './ProductPanel';
@@ -69,7 +69,7 @@ export function ProductDetail({ id, variant, onClose }: { id: string; variant: '
             </label>; })}</div>
         </section>
         : <section className="buy-box">
-          <div className="buy-head"><span className="buy-ic pm"><Icon name="zap" size={20} /></span><div><b>Via ProcMart</b><small>No group contract. ProcMart quotes and supplies it.</small></div></div>
+          <div className="buy-head"><span className="buy-ic pm"><Icon name="zap" size={20} /></span><div><b>Via ProcMart</b><small>{pmPrice(p) != null ? <>ProcMart price list · <b>{price(pmPrice(p)!)}</b> / {p.uom}</> : 'No group contract. ProcMart quotes and supplies it.'}</small></div></div>
           <div className="row" style={{ alignItems: 'center', margin: 0, gap: 12 }}><Qty value={qty} onChange={setQty} /><button className="btn pri" disabled={busy} onClick={() => add({ itemId: id, qty, intent: 'source' }, `Added ${qty} × ${p.name}`)}><Icon name="cart" size={17} />Add to requirement</button></div>
         </section>}
 

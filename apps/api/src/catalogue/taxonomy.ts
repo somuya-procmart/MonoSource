@@ -33,6 +33,14 @@ export const TYPE_SYNONYMS: Record<string, string[]> = {
   smps: ['switch mode power supply'], hmi: ['human machine interface', 'operator panel'], 'power cable': ['lt cable', 'ht cable', 'armoured cable', 'xlpe cable'],
   'deep groove ball bearing': ['dgbb', '6205', '6305'], 'safety shoe': ['safety boot', 'safety footwear'], 'safety helmet': ['hard hat'],
   'cable tie': ['zip tie', 'nylon tie'], 'solenoid valve': ['sov'], 'non return valve': ['check valve', 'nrv'],
+  'cutoff wheel': ['cutting wheel', 'cutting disc', 'cut off wheel', 'cut-off disc', 'wheel to cut steel and metal'], 'grinding wheel': ['grinding disc', 'dc wheel'],
+  'angle grinder': ['grinding machine', 'hand grinder', 'tool to grind and cut metal'], 'flap disc': ['flap wheel disc'],
+  'chain pulley block': ['chain block', 'hand hoist'], 'power contactor': ['contactor'], 'pressure gauge': ['manometer', 'pressure meter'],
+  'air cylinder': ['pneumatic cylinder', 'air cylinder iso'], 'pneumatic solenoid valve': ['solenoid valve', 'sov', '5/2 valve'], 'filter regulator lubricator': ['frl', 'air service unit'],
+  'wire rope': ['steel wire rope', 'crane rope'], 'flood light': ['led flood light', 'yard light'], 'induction motor': ['electric motor', 'ac motor', '3 phase motor'],
+  'gland packing': ['packing rope', 'pump packing'], 'oil seal': ['shaft seal', 'lip seal'], 'industrial grease': ['bearing grease'], 'hydraulic hose': ['hydraulic pipe', 'hose pipe'],
+  'variable frequency drive vfd': ['vfd', 'ac drive', 'inverter drive'], 'spiral wound gasket': ['swg', 'flange gasket'], 'proximity sensor': ['proximity switch', 'inductive sensor'],
+  'electrode': ['welding rod', 'welding electrode'], 'respiratory nose mask': ['respirator', 'dust mask', 'n95'], 'loctite': ['threadlocker', 'thread locker'],
 };
 
 const STOP = new Set(['i', 'need', 'want', 'to', 'buy', 'a', 'an', 'the', 'for', 'of', 'with', 'and', 'please', 'some', 'get', 'looking', 'me', 'my',
@@ -255,7 +263,7 @@ export interface AttrSpec { key: string; label: string; unit: string | null; req
 const VALUE_WORDS: { attr: RegExp; values: [RegExp, string][] }[] = [
   { attr: /conductor material/, values: [[/\b(copper|cu)\b/, 'Copper'], [/\b(aluminium|aluminum|al)\b/, 'Aluminium']] },
   { attr: /insulation/, values: [[/\bxlpe\b/, 'XLPE'], [/\bpvc\b/, 'PVC'], [/\bepr\b/, 'EPR'], [/\bfrls\b/, 'FRLS']] },
-  { attr: /armou?ring/, values: [[/\bunarm|unarmou?red\b/, 'Unarmoured'], [/\barmou?red\b|\barm\b/, 'Armoured']] },
+  { attr: /armou?ring/, values: [[/\bunarm|unarmou?red\b|\b[un]-arm\b|\bnon[- ]?arm/, 'Unarmoured'], [/\barmou?red\b|\barm\b/, 'Armoured']] },
   { attr: /^(material|moc|body material|material of construction)$/, values: [[/\bss ?316l?\b|stainless steel 316/, 'SS316'], [/\bss ?304\b|stainless steel 304/, 'SS304'], [/\bss\b|stainless steel/, 'Stainless steel'], [/\bms\b|mild steel/, 'Mild steel'], [/\bcs\b|carbon steel/, 'Carbon steel'], [/\bgi\b|galvani[sz]ed/, 'GI'], [/\bcast iron|\bci\b/, 'Cast iron'], [/\bbrass\b/, 'Brass'], [/\bpvc\b/, 'PVC'], [/\bhdpe\b/, 'HDPE'], [/\bnylon\b/, 'Nylon']] },
   { attr: /^(type|end connection|connection type)$/, values: [[/\bflg|flanged?\b/, 'Flanged'], [/\bscrewed|threaded|bsp|npt\b/, 'Threaded'], [/\bsw\b|socket weld/, 'Socket weld'], [/\bbw\b|butt weld/, 'Butt weld']] },
   { attr: /tripping curve/, values: [[/\b([bcd])[- ]?curve\b|\bcurve[- ]?([bcd])\b/, '$curve']] },
@@ -282,11 +290,59 @@ export function extractSpecs(text: string, attrs: AttrSpec[], mpn?: string | nul
     if (/number of cores|no of cores|cores/.test(label)) { const m = t.match(/\b(\d{1,2}(?:\.\d)?)\s?(?:c|core|cores)\b|\b(\d{1,2})\s?x\s?\d/); if (m) out[a.key] = `${m[1] ?? m[2]} core`; }
     if (/^model no|^part no|^part number/.test(label) && mpn) out[a.key] = mpn;
     for (const vw of VALUE_WORDS) if (vw.attr.test(label)) for (const [rx, v] of vw.values) { const m = t.match(rx); if (m) { out[a.key] = v === '$curve' ? `${(m[1] ?? m[2]).toUpperCase()} curve` : v; break; } }
-    // "KEY : VALUE" written out in the long text
-    const kv = t.match(new RegExp(`\\b${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[:=-]\\s*([a-z0-9][a-z0-9 ./x+-]{0,30}?)(?=\\s{2}|[,;]| [a-z ]{3,30}:|$)`));
-    if (kv && !out[a.key]) out[a.key] = kv[1].trim().toUpperCase();
+  }
+  // "KEY : VALUE KEY2 : VALUE2" written out in the SAP long text: a value runs until the next known label
+  const fields = labelledFields(t, attrs);
+  for (const a of attrs) {
+    if (out[a.key] || JUNK_ATTR.test(a.label.toLowerCase())) continue;
+    let v = fields.get(a.label.toLowerCase()); if (!v) continue;
+    const unit = a.unit?.toLowerCase();
+    if (unit) {   // "170 MM LENGTH" → 170 MM, "50" → 50 MM; a value that is no measure in this unit is left out
+      const m = v.match(/^(\d+(?:\.\d+)?(?:\s?(?:x|\/|-)\s?\d+(?:\.\d+)?)*)\s?([a-z/%"²]+)?/);
+      if (!m) continue;
+      const u = (m[2] ?? '').replace(/s$/, '');
+      if (u && !unitMatches(u, unit)) continue;
+      v = `${m[1].replace(/\s/g, '')} ${a.unit}`;
+    } else if (v.replace(/[^a-z0-9]/g, '').length < 2 || /^\d$/.test(v)) continue;
+    out[a.key] = v.toUpperCase();
   }
   return out;
 }
+
+/** Labels that carry no spec of their own ("ADDITIONAL INFORMATION : SPARE"). */
+const JUNK_ATTR = /^(additional information|additional info|remarks?|others?|notes?|description|specifications?|details?)$/;
+/** Labels SAP long texts use besides the product type's attributes: a value ends where one of these starts. */
+const TEXT_LABELS = ['manufacturer', 'make', 'mfr', 'brand', 'model number', 'model no', 'model', 'part number', 'part no', 'oem part name', 'oem part number',
+  'drawing number', 'drawing no', 'dwg no', 'dwg', 'catalogue number', 'catalog number', 'cat no', 'additional information', 'additional info', 'serial number',
+  'equipment', 'application', 'size', 'material', 'type', 'standard', 'grade', 'rating', 'capacity', 'ba', 'mm', 'pn', 'cat', 'ref', 'item'];
+/** Words that end a value even without a colon after them: "40 MM TIMKEN MAKE BEARING". */
+const VALUE_STOP = /\s(?:make|mfr|manufacturer|model|part no|part number|drawing|dwg|oem|additional|cat no|catalogue)\b.*$/;
+const escRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function labelledFields(t: string, attrs: AttrSpec[]): Map<string, string> {
+  const labels = [...new Set([...attrs.map((a) => a.label.toLowerCase()), ...TEXT_LABELS])].sort((x, y) => y.length - x.length);
+  const rx = new RegExp(`(?<![a-z0-9])(${labels.map(escRx).join('|')})\\s*[:=]`, 'g');
+  const hits = [...t.matchAll(rx)];
+  const out = new Map<string, string>();
+  hits.forEach((h, i) => {
+    const end = i + 1 < hits.length ? hits[i + 1].index! : t.length;
+    let v = t.slice(h.index! + h[0].length, end).trim();
+    v = v.split(/\s{2,}|[,;]/)[0].replace(VALUE_STOP, '').trim();
+    // an unknown label follows ("13 MM THICKNESS:8 MM", "SPHERICAL ROWS : DOUBLE"): the value ends before its last word
+    const next = v.search(/\s+[a-z][a-z0-9.]*\s*[:=]/); if (next >= 0) v = v.slice(0, next);
+    // a measurement followed by more words: keep the measurement ("600 MM WORKING PRESSURE" → 600 MM)
+    const meas = v.match(/^\d[\d.]*(?:\s?(?:x|\/|-)\s?\d[\d.]*)*\s?(?:mm|cm|m|mtr|in|inch|kg|kgs|bar|v|a|w|kw|kv|hp|rpm|sq ?mm|mm2|l|ltr|ml|nb)\b(?=\s+[a-z])/);
+    if (meas) v = meas[0];
+    v = v.replace(/[\s.\-:=]+$/, '');
+    if (v.length > 40) v = v.slice(0, 40).replace(/\s+\S*$/, '');
+    if (v && !out.has(h[1])) out.set(h[1], v);
+  });
+  return out;
+}
+
+const UNIT_WORDS: Record<string, string[]> = { mm: ['mm'], m: ['m', 'mtr', 'meter', 'metre'], mtr: ['m', 'mtr', 'meter', 'metre'], inch: ['inch', 'in', '"'],
+  kg: ['kg', 'kgs'], kgs: ['kg', 'kgs'], v: ['v', 'vac', 'vdc', 'volt'], a: ['a', 'amp', 'amps'], w: ['w', 'watt'], kw: ['kw'], kv: ['kv'], hp: ['hp'], rpm: ['rpm'],
+  bar: ['bar'], ltr: ['l', 'ltr', 'litre', 'liter'], sqmm: ['sqmm', 'sq', 'mm2', 'mm²'], nb: ['nb'], micron: ['micron', 'mic', 'µm'] };
+const unitMatches = (u: string, unit: string) => (UNIT_WORDS[unit] ?? [unit]).includes(u);
 
 export const attrKey = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');

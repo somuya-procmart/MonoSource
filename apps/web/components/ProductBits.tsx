@@ -17,8 +17,9 @@ export function Heart({ item, onChange }: { item: { id: string; saved?: boolean 
 export function Qty({ value, onChange, min = 1 }: { value: number; onChange: (n: number) => void; min?: number }) {
   return <div className="qty"><button type="button" aria-label="Decrease" onClick={() => onChange(Math.max(min, value - 1))}><Icon name="minus" size={14} /></button><input type="number" min={min} value={value} aria-label="Quantity" onChange={(e) => onChange(Math.max(min, Number(e.target.value) || min))} /><button type="button" aria-label="Increase" onClick={() => onChange(value + 1)}><Icon name="plus" size={14} /></button></div>;
 }
-export function SpecChips({ specs, max = 4 }: { specs?: Record<string, string>; max?: number }) {
-  const e = Object.entries(specs ?? {}).slice(0, max); if (!e.length) return null;
+export function SpecChips({ specs, keySpecs, max = 4 }: { specs?: Record<string, string>; keySpecs?: { key: string; label: string; value: string }[]; max?: number }) {
+  // keySpecs (from the API) are in the product type's order with proper labels; raw specs are the fallback
+  const e = (keySpecs?.length ? keySpecs.map((s) => [s.label, s.value] as [string, string]) : Object.entries(specs ?? {})).slice(0, max); if (!e.length) return null;
   return <div className="specs">{e.map(([k, v]) => <span key={k} className="spec"><b>{k}</b>{String(v)}</span>)}</div>;
 }
 export const minQty = (it: any) => Math.max(1, Number(it.source?.supplies?.[0]?.moq ?? 1));
@@ -42,7 +43,7 @@ export function ProductRow({ it, plant, plantName, compare, onCompare, i = 0 }: 
     <div style={{ minWidth: 0 }}><a href={`/product/${it.id}`} className="pname" onClick={(e) => { e.preventDefault(); open(it.id); }}>{it.name}</a>
       <div className="psub">{[it.brand, it.mpn].filter(Boolean).join(' · ')}{it.codes?.length > 0 && ` · Code ${it.codes[0].code}`}</div>
       {it.matchedOn && <div style={{ marginTop: 4 }}><span className="tag pri" title={it.matchedOn.value}><Icon name="search" size={12} />Matched on {MATCH[it.matchedOn.kind] ?? it.matchedOn.kind}: <b style={{ fontWeight: 600 }}>{it.matchedOn.value}</b>{it.matchedOn.supplier ? ` · ${it.matchedOn.supplier}` : ''}</span></div>}
-      <SpecChips specs={it.specs} max={3} /><AltChip s={s} /></div>
+      <SpecChips specs={it.specs} keySpecs={it.keySpecs} max={3} /><AltChip s={s} /></div>
     <div className="supplycol"><SourceSummary it={it} plant={!!plant} plantName={plantName} /></div>
     <div className="actcol" style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
       <div className="row" style={{ marginBottom: 0, flexWrap: 'nowrap' }}><Heart item={it} />{quick && <Qty value={qty} onChange={setQty} />}</div>

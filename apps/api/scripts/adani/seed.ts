@@ -1,7 +1,7 @@
 /**
- * Loads REAL Adani data (from extract.py output) into tenant "adani".
+ * Loads REAL Adani data (from extract.py, then clean.py) into tenant "adani".
  *
- *   DATABASE_ADMIN_URL=... npx tsx scripts/adani/seed.ts [--data .data/adani] [--reset] [--semantic]
+ *   DATABASE_ADMIN_URL=... npx tsx scripts/adani/seed.ts [--data .data/adani] [--reset] [--semantic] [--read-write]
  *
  * What gets created, all from the files (nothing invented):
  *   taxonomy      ProcMart category structure: category > sub > child > product type, attributes, product-type vectors
@@ -16,7 +16,7 @@
  */
 import { Client } from 'pg';
 import { randomUUID, randomBytes } from 'crypto';
-import { createReadStream, readFileSync, writeFileSync } from 'fs';
+import { createReadStream, existsSync, readFileSync, writeFileSync } from 'fs';
 import { createInterface } from 'readline';
 import { join } from 'path';
 import { parse } from 'csv-parse/sync';
@@ -43,36 +43,46 @@ async function bulk(c: Client, table: string, cols: string[], types: string[], r
   }
 }
 
+/**
+ * Deletes a tenant in committed steps, children before parents, with VACUUM between passes. In one transaction the
+ * deleted rows stay on disk until commit (the old and new data together overflow Supabase's free disk) and every
+ * foreign-key check scans the dead rows of the child tables (a 30-minute wipe).
+ */
 async function wipeTenant(c: Client, tenantId: string) {
   const tables = (await c.query(`SELECT table_name FROM information_schema.columns WHERE table_schema='public' AND column_name='tenant_id' AND table_name <> 'tenants'`)).rows.map((r) => r.table_name as string);
   await c.query(`ALTER TABLE audit_log DISABLE TRIGGER audit_no_update`);
-  let left = [...tables];
-  for (let pass = 0; left.length && pass < 30; pass++) {
-    const next: string[] = [];
-    for (const t of left) {
-      await c.query('SAVEPOINT w');
-      try { await c.query(`DELETE FROM ${t} WHERE tenant_id=$1`, [tenantId]); await c.query('RELEASE SAVEPOINT w'); }
-      catch (e: any) { await c.query('ROLLBACK TO SAVEPOINT w'); if (e.code === '23503') next.push(t); else throw e; }
+  try {
+    let left = [...tables];
+    for (let pass = 0; left.length && pass < 30; pass++) {
+      const next: string[] = []; const done: string[] = [];
+      for (const t of left) {
+        try { await c.query(`DELETE FROM ${t} WHERE tenant_id=$1`, [tenantId]); done.push(t); }
+        catch (e: any) { if (e.code === '23503') next.push(t); else throw e; }
+      }
+      // self-references (taxonomy, org tree): null the parents, then retry
+      if (next.includes('taxonomy_nodes')) await c.query(`UPDATE taxonomy_nodes SET parent_id=NULL WHERE tenant_id=$1`, [tenantId]);
+      if (next.includes('org_nodes')) await c.query(`UPDATE org_nodes SET parent_id=NULL WHERE tenant_id=$1`, [tenantId]);
+      if (done.length) await c.query(`VACUUM ${done.join(', ')}`);
+      log(`wipe pass ${pass + 1}: ${done.length} tables emptied, ${next.length} waiting on references`);
+      left = next;
     }
-    // self-references (taxonomy, org tree): null the parents, then retry
-    if (next.includes('taxonomy_nodes')) await c.query(`UPDATE taxonomy_nodes SET parent_id=NULL WHERE tenant_id=$1`, [tenantId]);
-    if (next.includes('org_nodes')) await c.query(`UPDATE org_nodes SET parent_id=NULL WHERE tenant_id=$1`, [tenantId]);
-    left = next;
-  }
-  await c.query(`ALTER TABLE audit_log ENABLE TRIGGER audit_no_update`);
-  if (left.length) throw new Error('could not wipe: ' + left.join(', '));
-  await c.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]);
+    if (left.length) throw new Error('could not wipe: ' + left.join(', '));
+    await c.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]);
+  } finally { await c.query(`ALTER TABLE audit_log ENABLE TRIGGER audit_no_update`); }
 }
 
 (async () => {
   const c = new Client({ connectionString: process.env.DATABASE_ADMIN_URL || DEFAULT_ADMIN_URL });
   await c.connect();
   await c.query(`SELECT set_config('app.platform','on',false)`);
+  await c.query(`SET statement_timeout = 0`);   // Supabase's default timeout cancels the tenant wipe (FK checks over 300k rows)
+  // Supabase turns a full database read-only; --read-write lifts that for this session only, so the reset can free the space
+  if (process.argv.includes('--read-write')) await c.query(`SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE`);
+  const old = (await c.query(`SELECT id FROM tenants WHERE slug=$1`, [SLUG])).rows[0];
+  if (old && !RESET) throw new Error(`tenant "${SLUG}" exists; run with --reset to rebuild it (deletes all its data)`);
+  if (old) { log('wiping existing tenant (committed: the tenant is gone until the load below finishes)'); await wipeTenant(c, old.id); }
   await c.query('BEGIN');
   try {
-    const old = (await c.query(`SELECT id FROM tenants WHERE slug=$1`, [SLUG])).rows[0];
-    if (old && !RESET) throw new Error(`tenant "${SLUG}" exists; run with --reset to rebuild it (deletes all its data)`);
-    if (old) { log('wiping existing tenant'); await wipeTenant(c, old.id); }
 
     // ───────── tenant, levels, roles, servers ─────────
     const T = randomUUID();
@@ -139,7 +149,10 @@ async function wipeTenant(c: Client, tenantId: string) {
     const idx = buildTypeIndex(types);
     const typeById = new Map(types.map((t, i) => [t.id, { ...t, i }]));
     const items: any[] = [];
-    for await (const line of createInterface({ input: createReadStream(join(DATA, 'items.jsonl')) })) if (line.trim()) items.push(JSON.parse(line));
+    // clean.py's output (tidied names, part numbers, makes) when it has been run; the raw extract otherwise
+    const itemsFile = existsSync(join(DATA, 'items.clean.jsonl')) ? 'items.clean.jsonl' : 'items.jsonl';
+    log('items from', itemsFile);
+    for await (const line of createInterface({ input: createReadStream(join(DATA, itemsFile)) })) if (line.trim()) items.push(JSON.parse(line));
     const unplaced: number[] = [];
     const placed = items.map((it, i) => {
       const k = classify(idx, it.name, { category: it.pm_category });
@@ -163,7 +176,7 @@ async function wipeTenant(c: Client, tenantId: string) {
       const childTypes = p && !p.typeId ? types.filter((t) => childNode.get(childKeyOf(t)) === p.node) : [];
       const category = pt?.category ?? childTypes[0]?.category ?? (it.pm_category || null);
       const specs = pt ? extractSpecs(`${it.name} ${it.description}`, ptAttrs.get(pt.id)!, it.mpn) : {};
-      const kw = [...new Set([...words(it.name, { expand: true }), ...(pt ? words(pt.name, { expand: false }) : []), ...(pt?.synonyms ?? []).flatMap((s) => words(s)),
+      const kw = [...new Set([...words(it.name, { expand: true }), ...(it.raw_name ? words(it.raw_name, { expand: true }) : []), ...(pt ? words(pt.name, { expand: false }) : []), ...(pt?.synonyms ?? []).flatMap((s) => words(s)),
         ...(p && !p.typeId ? [p.matched] : []), ...(pt ? words(pt.child, { expand: false }) : [])])].join(' ');
       irows.push([id, T, it.name.slice(0, 300), it.description, it.brand || null, it.brand || null, it.mpn || null, (it.uom || 'EA').slice(0, 10), category, JSON.stringify(specs),
         it.serviceability || null, 'active', p?.node ?? null, JSON.stringify(p ? { basis: p.basis, score: p.score, matched: p.matched } : { basis: 'none' }), kw,

@@ -54,7 +54,7 @@ export async function searchCatalogue(c: PoolClient, text: string, o: SearchOpti
     const qv = await embedQuery(text); mark('embed');
     if (qv) {
       semantic = true;
-      const near = (await c.query(`SELECT id, 1 - (embedding <=> $1::vector) AS sim FROM taxonomy_nodes WHERE level='product_type' AND embedding IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 15`, [toPgVector(qv)])).rows as { id: string; sim: number }[];
+      const near = (await c.query(`SELECT id, 1 - (embedding <=> $1::vector) AS sim FROM taxonomy_nodes WHERE level='product_type' AND embedding IS NOT NULL AND item_count > 0 ORDER BY (embedding <=> $1::vector) + 0 LIMIT 15`, [toPgVector(qv)])).rows as { id: string; sim: number }[];
       const top = near[0]?.sim ?? 0;
       if (u.purpose) for (const [k, v] of typeScores) typeScores.set(k, v * 0.4);
       for (const n of near) {

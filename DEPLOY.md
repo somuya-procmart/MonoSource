@@ -65,12 +65,23 @@ The workbooks never go into git. On a trusted machine:
 
 ```bash
 python3 -I apps/api/scripts/adani/extract.py --bu "<Business unit wise data.xlsx>" --products "<ProcMart supporting file.xlsx>" --taxonomy "<Category Structure.xlsx>" --out apps/api/.data/adani
+python3 -I apps/api/scripts/adani/clean.py --data apps/api/.data/adani   # tidies names, part numbers, makes (original SAP text stays searchable)
 DATABASE_ADMIN_URL='<session pooler URL>' npm -w apps/api run seed:adani
 ```
 
 About 10 minutes. Adds `--reset` to rebuild the tenant (deletes its data). Sign-in: organisation ID `adani`; the generated accounts and passwords are written to `apps/api/.data/adani/accounts.txt` (git-ignored). This is real company data: share the URL only with people allowed to see it.
 
 **Supabase size:** about 400 MB with everything (items 158 MB, PO history 103 MB, ARC lines 47 MB). That fits the free tier's 500 MB, with little room to grow: move to Pro before adding more years of POs or per-item vectors.
+
+### Or: the curated showcase catalogue
+
+Same org tree and ProcMart taxonomy, but instead of the 158k raw SAP texts the tenant gets ~1,600 curated products in the categories Adani buys most (ranked from the FY25-26 PO lines): real brands and part numbers, full spec sheets keyed to the ProcMart attribute templates, descriptions, product images and data sheets. 90% of items sit on group ARCs with distributors (a quarter with two suppliers), 10% are supplied by ProcMart from a price list. **Prices, distributors and SAP material codes are illustrative.** Needs `org.csv`, `taxonomy.json` and (for ranking) `type_demand.json` in the data folder.
+
+```bash
+DATABASE_ADMIN_URL='<session pooler URL>' SUPABASE_URL='<project URL>' SUPABASE_SERVICE_ROLE_KEY='<service role key>' npm -w apps/api run seed:adani:curated -- --reset
+```
+
+The Supabase variables send images and data sheets to Storage (without them they go to the local `.storage` folder, which the deployed API cannot see). Small: about 15 MB of database and 25 MB of files.
 
 ## Ask MonoSource agent (optional)
 

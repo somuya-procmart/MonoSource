@@ -26,8 +26,17 @@ export async function enrichItems(c: PoolClient, items: any[], plantId?: string 
   })) : [];
   const sources = await computeSources(c, items.map((i) => i.id), plantId ?? null);
   const imgs = items.length ? (await c.query(`SELECT DISTINCT ON (item_id) item_id, id FROM item_assets WHERE item_id = ANY($1::uuid[]) AND kind='image' ORDER BY item_id, created_at`, [items.map((i) => i.id)])).rows : [];
+  // The specs that identify the item, in the product type's order (required first), labelled; part numbers are shown elsewhere.
+  const typeIds = [...new Set(items.map((i) => i.product_type_id).filter(Boolean))];
+  const attrs = typeIds.length ? (await c.query(`SELECT product_type_id, key, label FROM product_type_attributes WHERE product_type_id = ANY($1::uuid[]) ORDER BY required DESC, position`, [typeIds])).rows : [];
+  const keySpecs = (i: any) => {
+    const s = i.specs ?? {}; const own = attrs.filter((a) => a.product_type_id === i.product_type_id && s[a.key] != null && !/^(model_no|part_no|part_number|part_code|brand_model_no|oem_part_no)$/.test(a.key));
+    const rank = (v: string) => (v.length > 28 ? 2 : /\d/.test(v) ? 0 : 1);   // sizes/ratings first, short words next, long text last
+    return own.map((a) => ({ key: a.key, label: a.label, value: String(s[a.key]) })).map((x, n) => ({ x, n })).sort((p, q) => rank(p.x.value) - rank(q.x.value) || p.n - q.n).map((p) => p.x);
+  };
   return items.map(({ search, ...i }, idx) => ({
     ...i,
+    keySpecs: keySpecs(i),
     imageId: imgs.find((x) => x.item_id === i.id)?.id ?? null,
     source: sources.get(i.id) ? compactSource(sources.get(i.id)!) : null,
     routing: plantId ? { route: decisions[idx].route, model: decisions[idx].model, unitPrice: decisions[idx].unitPrice, reason: (decisions[idx].trace.at(-1)?.detail as any) ?? decisions[idx].trace.at(-1)?.outcome } : null,

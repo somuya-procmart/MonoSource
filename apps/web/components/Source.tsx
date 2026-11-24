@@ -23,6 +23,11 @@ export function SourceSummary({ it, plant }: { it: any; plant: boolean; plantNam
   if (!plant) return <div className="mut" style={{ fontSize: 13 }}>Pick a plant for price</div>;
   if (s.case === 'A') return <div><div style={{ marginBottom: 4 }}><SourceBadge src={s} plant /></div>{s.lowestPrice == null ? <div className="psub">Rate as per ARC in SAP</div> : <div className="price">{s.multiple && <small>from </small>}{price(s.lowestPrice)}<small> / {it.uom}</small></div>}
     <div className="psub">{s.multiple ? `${s.supplies[0].supplier} +${s.supplies.length - 1}` : s.supplies[0].supplier}</div></div>;
-  return <div><div style={{ marginBottom: 4 }}><SourceBadge src={s} plant /></div><div className="psub">Price on quote</div></div>;
+  const pm = pmPrice(it);
+  return <div><div style={{ marginBottom: 4 }}><SourceBadge src={s} plant /></div>{pm == null ? <div className="psub">Price on quote</div> : <><div className="price">{price(pm)}<small> / {it.uom}</small></div><div className="psub">ProcMart price list</div></>}</div>;
+}
+/** ProcMart's price-list rate when the item routes to it (no group ARC), else null (ProcMart quotes). */
+export function pmPrice(it: any): number | null {
+  return it?.routing?.route === 'direct' && it.routing.unitPrice != null ? Number(it.routing.unitPrice) : null;
 }
 export function AltChip({ s }: { s: any }) { const n = (s?.alternatives?.approved ?? 0) + (s?.alternatives?.suggested ?? 0); return n ? <span className="tag pri" style={{ marginLeft: 6 }}><Icon name="swap" size={12} />{n} alternative{n > 1 ? 's' : ''}</span> : null; }
