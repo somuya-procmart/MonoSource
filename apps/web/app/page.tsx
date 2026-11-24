@@ -9,6 +9,7 @@ import { AuthImage } from '../components/AuthImage';
 import { useOpenProduct } from '../components/ProductPanel';
 import { useAddToCart, minQty } from '../components/ProductBits';
 import { NonCatalogueDialog } from '../components/NonCatalogue';
+import { pmPrice } from '../components/Source';
 import { STATUS_LABEL, STATUS_TONE, ago, catLabel, price } from '../lib/format';
 
 /** Two ways to buy: the group ARC, or ProcMart. Both are one click. */
@@ -28,7 +29,7 @@ function ItemCard({ it, plant }: { it: any; plant: string }) {
     <a href={`/product/${it.id}`} className="h-item-pic" aria-label={`Open ${it.name}`} onClick={(e) => { e.preventDefault(); open(it.id); }}><Pic imageId={it.imageId} category={it.category} alt={it.name} /></a>
     <a href={`/product/${it.id}`} className="h-item-name" onClick={(e) => { e.preventDefault(); open(it.id); }}>{it.name}</a>
     <div className="h-sub">{[it.brand, it.mpn].filter(Boolean).join(' · ')}</div>
-    <div className="h-price">{plant && s?.case === 'A' ? <>{s.multiple && <small>from </small>}{price(s.lowestPrice)}<small> / {it.uom}</small></> : <span className="h-price-q">{plant ? c.price : 'Pick a plant for price'}</span>}</div>
+    <div className="h-price">{plant && s?.case === 'A' ? <>{s.multiple && <small>from </small>}{price(s.lowestPrice)}<small> / {it.uom}</small></> : plant && pmPrice(it) != null ? <>{price(pmPrice(it)!)}<small> / {it.uom}</small></> : <span className="h-price-q">{plant ? c.price : 'Pick a plant for price'}</span>}</div>
     {plant && <span className={`h-pill ${c.tone}`}>{c.label}</span>}
     <button className={`h-btn ${quick && arc ? 'pri' : ''} ${busy ? 'busy' : ''}`} disabled={busy} onClick={go}>{!plant ? 'View item' : quick ? 'Add to requirement' : 'Compare suppliers'}</button>
   </article>;

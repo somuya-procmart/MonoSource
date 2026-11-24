@@ -11,6 +11,7 @@ import { Matches } from 'class-validator';
 import { audit, canAtNode, CurrentCtx, Ctx, Perm } from '../common/security';
 import { applicableLines } from '../contracts/coverage';
 import { computeSources, SourceView } from './source';
+import { searchCatalogue } from './search';
 import { routeLines, vendorCodeSet } from '../buying/buying.controller';
 
 
@@ -25,8 +26,17 @@ export async function enrichItems(c: PoolClient, items: any[], plantId?: string 
   })) : [];
   const sources = await computeSources(c, items.map((i) => i.id), plantId ?? null);
   const imgs = items.length ? (await c.query(`SELECT DISTINCT ON (item_id) item_id, id FROM item_assets WHERE item_id = ANY($1::uuid[]) AND kind='image' ORDER BY item_id, created_at`, [items.map((i) => i.id)])).rows : [];
+  // The specs that identify the item, in the product type's order (required first), labelled; part numbers are shown elsewhere.
+  const typeIds = [...new Set(items.map((i) => i.product_type_id).filter(Boolean))];
+  const attrs = typeIds.length ? (await c.query(`SELECT product_type_id, key, label FROM product_type_attributes WHERE product_type_id = ANY($1::uuid[]) ORDER BY required DESC, position`, [typeIds])).rows : [];
+  const keySpecs = (i: any) => {
+    const s = i.specs ?? {}; const own = attrs.filter((a) => a.product_type_id === i.product_type_id && s[a.key] != null && !/^(model_no|part_no|part_number|part_code|brand_model_no|oem_part_no)$/.test(a.key));
+    const rank = (v: string) => (v.length > 28 ? 2 : /\d/.test(v) ? 0 : 1);   // sizes/ratings first, short words next, long text last
+    return own.map((a) => ({ key: a.key, label: a.label, value: String(s[a.key]) })).map((x, n) => ({ x, n })).sort((p, q) => rank(p.x.value) - rank(q.x.value) || p.n - q.n).map((p) => p.x);
+  };
   return items.map(({ search, ...i }, idx) => ({
     ...i,
+    keySpecs: keySpecs(i),
     imageId: imgs.find((x) => x.item_id === i.id)?.id ?? null,
     source: sources.get(i.id) ? compactSource(sources.get(i.id)!) : null,
     routing: plantId ? { route: decisions[idx].route, model: decisions[idx].model, unitPrice: decisions[idx].unitPrice, reason: (decisions[idx].trace.at(-1)?.detail as any) ?? decisions[idx].trace.at(-1)?.outcome } : null,
@@ -133,23 +143,20 @@ export class CatalogueController {
   /** Search items; with plantId, each hit carries the contract coverage that applies to *that* plant only. */
   @Perm('catalogue:read')
   @Get('search')
-  async search(@CurrentCtx() ctx: Ctx, @Query('q') q = '', @Query('plantId') plantId?: string) {
+  async search(@CurrentCtx() ctx: Ctx, @Query('q') q = '', @Query('plantId') plantId?: string, @Res({ passthrough: true }) res?: Response) {
     if (plantId && !/^[0-9a-f-]{36}$/.test(plantId)) throw new BadRequestException('bad plantId');
     return this.db.tx(ctx, async (c) => {
       if (plantId && !(await canAtNode(c, ctx, 'catalogue:read', plantId))) throw new BadRequestException('Plant not in your scope');
       const term = q.trim();
-      const items = term
-        ? (await c.query(
-            `SELECT i.*, GREATEST(ts_rank(search, to_tsquery('simple', $2)), similarity(name,$1)) AS rank,
-                    (SELECT coalesce(json_agg(json_build_object('server', e.code, 'code', ic.material_code)), '[]') FROM item_erp_codes ic JOIN erp_systems e ON e.id=ic.erp_system_id WHERE ic.item_id=i.id) AS codes
-               FROM catalogue_items i
-              WHERE i.status='active' AND (search @@ to_tsquery('simple', $2) OR name % $1
-                    OR EXISTS (SELECT 1 FROM item_erp_codes ic WHERE ic.item_id=i.id AND ic.material_code = $1))
-              ORDER BY rank DESC, name LIMIT 50`,
-            [term, term.split(/\s+/).filter(Boolean).map((w) => w.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean).map((w) => w + ':*').join(' & ') || 'x'],
-          )).rows
-        : (await c.query(`SELECT i.*, '[]'::json AS codes FROM catalogue_items i WHERE status='active' ORDER BY name LIMIT 50`)).rows;
-      return enrichItems(c, items, plantId);
+      const t0 = Date.now(); const found = term ? await searchCatalogue(c, term, { limit: 50 }) : null; const ids = found ? found.hits.map((h) => h.id) : [];
+      const timing = (extra: Record<string, number>) => res?.setHeader('Server-Timing', Object.entries({ ...(found?.timings ?? {}), ...extra }).map(([k, v]) => `${k};dur=${v}`).join(', '));
+      const tSearch = Date.now() - t0;
+      const rows = term
+        ? (await c.query(`SELECT i.*, (SELECT coalesce(json_agg(json_build_object('server', e.code, 'code', ic.material_code)), '[]') FROM item_erp_codes ic JOIN erp_systems e ON e.id=ic.erp_system_id WHERE ic.item_id=i.id) AS codes
+               FROM catalogue_items i WHERE i.id = ANY($1::uuid[])`, [ids])).rows
+        : (await c.query(`SELECT i.*, '[]'::json AS codes FROM catalogue_items i WHERE status='active' ORDER BY po_lines DESC, name LIMIT 50`)).rows;
+      const items = term ? ids.map((id) => rows.find((r) => r.id === id)).filter(Boolean) : rows;
+      const t1 = Date.now(); const out = await enrichItems(c, items, plantId); timing({ search: tSearch, enrich: Date.now() - t1 }); return out;
     });
   }
 
@@ -214,7 +221,7 @@ export class CatalogueController {
     if (!file) throw new BadRequestException('file required');
     const kind = sniffAsset(file.buffer);
     if (!kind) throw new BadRequestException('Only PNG, JPEG, WebP images and PDF documents are accepted');
-    const stored = this.storage.put(ctx.tenantId, file.buffer);
+    const stored = await this.storage.put(ctx.tenantId, file.buffer);
     return this.db.tx(ctx, async (c) => {
       if (!(await c.query(`SELECT 1 FROM catalogue_items WHERE id=$1`, [id])).rowCount) throw new NotFoundException();
       const r = (await c.query(`INSERT INTO item_assets(tenant_id,item_id,kind,filename,mime,size_bytes,sha256,storage_key,caption,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
@@ -232,7 +239,7 @@ export class CatalogueController {
     if (!a) throw new NotFoundException();
     res.setHeader('Content-Type', a.mime); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     res.setHeader('Content-Disposition', `${a.kind === 'image' ? 'inline' : 'attachment'}; filename="${a.filename}"`);
-    res.send(this.storage.get(a.storage_key));
+    res.send(await this.storage.get(a.storage_key));
   }
 
   // ───────── equivalence list (match ladder step 3) & guided-buying attributes ─────────

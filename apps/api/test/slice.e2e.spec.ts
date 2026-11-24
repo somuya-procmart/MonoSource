@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test';
 process.env.OUTBOX_WORKER = 'off';
-process.env.DATABASE_ADMIN_URL = 'postgres://localhost:5432/monosource_test';
-process.env.DATABASE_URL = 'postgres://monosource_app:monosource_app_dev@localhost:5432/monosource_test';
+process.env.DATABASE_ADMIN_URL = 'postgres://postgres@localhost:54322/monosource_test';
+process.env.DATABASE_URL = 'postgres://monosource_app:monosource_app_dev@localhost:54322/monosource_test';
 process.env.STORAGE_DIR = require('os').tmpdir() + '/monosource-test-storage';
 process.env.RATE_LIMIT = '100000';
 

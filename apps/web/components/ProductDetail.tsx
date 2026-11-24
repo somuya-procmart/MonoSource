@@ -7,7 +7,7 @@ import { Icon, categoryIcon } from './Icon';
 import { AuthImage } from './AuthImage';
 import { Heart, Qty } from './ProductBits';
 import { Thumb } from './Thumb';
-import { SourceBadge } from './Source';
+import { SourceBadge, pmPrice } from './Source';
 import { SupplierDrawer } from './SupplierDrawer';
 import { dmy, inr, num, price } from '../lib/format';
 import { useOpenProduct } from './ProductPanel';
@@ -39,7 +39,7 @@ export function ProductDetail({ id, variant, onClose }: { id: string; variant: '
   const images = p.assets.filter((a: any) => a.kind === 'image'); const docs = p.assets.filter((a: any) => a.kind === 'document');
   const attrs: any[] = p.attributes ?? []; const specRows = [...attrs.filter((a) => p.specs?.[a.key] !== undefined).map((a) => [a.label, p.specs[a.key]]), ...Object.entries(p.specs ?? {}).filter(([k]) => !attrs.some((a) => a.key === k)).map(([k, v]) => [k.replace(/[_-]/g, ' ').replace(/^\w/, (c) => c.toUpperCase()), v])] as [string, string][];
   const minOrder = Number((supply ?? src.supplies[0])?.moq ?? 1);
-  const lowest = src.supplies.length ? Math.min(...src.supplies.map((s: any) => s.netPrice)) : null;
+  const priced = src.supplies.filter((s: any) => s.netPrice != null); const lowest = priced.length ? Math.min(...priced.map((s: any) => s.netPrice)) : null;
   const aliasGroups = Object.entries(p.aliases.reduce((m: any, a: any) => ((m[a.kind] ??= []).push(a.value), m), {})) as [string, string[]][];
 
   return <div className="pdx" style={variant === 'panel' ? { display: 'flex', flexDirection: 'column', height: 'calc(100% - 59px)' } : undefined}>
@@ -64,12 +64,12 @@ export function ProductDetail({ id, variant, onClose }: { id: string; variant: '
               <input type="radio" name="supply" checked={on} onChange={() => { setSel(s.contractLineId); setQty((q) => Math.max(q, Number(s.moq ?? 1))); }} />
               <span className="offer-av" aria-hidden>{s.supplier.split(/\s+/).slice(0, 2).map((w: string) => w[0]).join('')}</span>
               <span className="offer-who"><button type="button" className="offer-name" onClick={(e) => { e.preventDefault(); setSupplier(s.supplierId); }}>{s.supplier}</button><small>{s.number}{s.moq ? ` · Min ${num(s.moq)} ${s.uom}` : ''}</small></span>
-              <span className="offer-price"><b>{price(s.netPrice)}</b><small>/ {s.uom}</small></span>
+              <span className="offer-price">{s.netPrice == null ? <small>Rate as per ARC in SAP</small> : <><b>{price(s.netPrice)}</b><small>/ {s.uom}</small></>}</span>
               <span className="offer-tags">{best && <span className="h-pill ok">Lowest</span>}{soon && <span className="h-pill warn">Ends in {s.daysLeft}d</span>}</span>
             </label>; })}</div>
         </section>
         : <section className="buy-box">
-          <div className="buy-head"><span className="buy-ic pm"><Icon name="zap" size={20} /></span><div><b>Via ProcMart</b><small>No group contract. ProcMart quotes and supplies it.</small></div></div>
+          <div className="buy-head"><span className="buy-ic pm"><Icon name="zap" size={20} /></span><div><b>Via ProcMart</b><small>{pmPrice(p) != null ? <>ProcMart price list · <b>{price(pmPrice(p)!)}</b> / {p.uom}</> : 'No group contract. ProcMart quotes and supplies it.'}</small></div></div>
           <div className="row" style={{ alignItems: 'center', margin: 0, gap: 12 }}><Qty value={qty} onChange={setQty} /><button className="btn pri" disabled={busy} onClick={() => add({ itemId: id, qty, intent: 'source' }, `Added ${qty} × ${p.name}`)}><Icon name="cart" size={17} />Add to requirement</button></div>
         </section>}
 
@@ -93,13 +93,13 @@ export function ProductDetail({ id, variant, onClose }: { id: string; variant: '
       {(docs.length > 0 || src.supplies.length > 0) && <section className="card">
         {docs.length > 0 && <><h2>Documents</h2>{docs.map((d: any) => <div key={d.id} className="row"><Icon name="file" size={18} /><b>{d.filename}</b><span className="mut" style={{ fontSize: 12 }}>{Math.round(d.sizeBytes / 1024)} KB</span><button className="sec" onClick={() => download(d)}><Icon name="download" size={15} />Download</button></div>)}</>}
         {src.supplies.length > 0 && <details style={{ marginTop: docs.length ? 12 : 0 }}><summary><Icon name="chevronRight" size={14} />Contract conditions</summary>
-          {src.supplies.map((s: any) => <dl key={s.contractLineId} className="kv" style={{ margin: '10px 0' }}><dt>Contract</dt><dd>{s.number} · {s.supplier}</dd><dt>Validity</dt><dd>{dmy(s.validFrom)} to {dmy(s.validTo)}</dd><dt>Price basis</dt><dd>{price(s.netPrice)} per {s.uom}, excluding GST</dd><dt>Minimum order</dt><dd>{s.moq ? `${num(s.moq)} ${s.uom}` : 'None stated'}</dd><dt>Quantity cap</dt><dd>{s.qtyCap ? `${num(s.qtyCap)} · ${num(s.balance)} remaining` : 'None stated'}</dd>{can(me, 'contracts:read') && <><dt>Full contract</dt><dd><Link href={`/contracts/${s.contractId}`}>Open contract <Icon name="arrowRight" size={13} /></Link></dd></>}</dl>)}</details>}
+          {src.supplies.map((s: any) => <dl key={s.contractLineId} className="kv" style={{ margin: '10px 0' }}><dt>Contract</dt><dd>{s.number} · {s.supplier}</dd><dt>Validity</dt><dd>{dmy(s.validFrom)} to {dmy(s.validTo)}</dd><dt>Price basis</dt><dd>{s.netPrice == null ? 'Rate held on the ARC in SAP (not loaded in MonoSource)' : `${price(s.netPrice)} per ${s.uom}, excluding GST`}</dd><dt>Minimum order</dt><dd>{s.moq ? `${num(s.moq)} ${s.uom}` : 'None stated'}</dd><dt>Quantity cap</dt><dd>{s.qtyCap ? `${num(s.qtyCap)} · ${num(s.balance)} remaining` : 'None stated'}</dd>{can(me, 'contracts:read') && <><dt>Full contract</dt><dd><Link href={`/contracts/${s.contractId}`}>Open contract <Icon name="arrowRight" size={13} /></Link></dd></>}</dl>)}</details>}
       </section>}
     </div>
 
     {/* purchase bar — only when an order can be placed on contract */}
     {plant && src.case === 'A' && <div className="buybar" style={{ borderTop: '1px solid var(--bd)', background: '#fff', padding: '12px 22px', display: 'flex', alignItems: 'center', gap: 16, position: 'sticky', bottom: 0, boxShadow: '0 -8px 20px -12px rgba(16,24,40,.18)' }}>
-      <div style={{ flex: 1, minWidth: 0 }}>{supply ? <><div className="mut" style={{ fontSize: 12 }}>{supply.supplier}</div><div style={{ fontWeight: 700, fontSize: 18 }}>{inr(supply.netPrice * qty)} <span className="mut" style={{ fontWeight: 500, fontSize: 13 }}>({price(supply.netPrice)} × {qty})</span></div></> : <div className="mut">Pick a supplier</div>}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>{supply ? <><div className="mut" style={{ fontSize: 12 }}>{supply.supplier}</div><div style={{ fontWeight: 700, fontSize: 18 }}>{supply.netPrice == null ? <>{qty} {supply.uom} <span className="mut" style={{ fontWeight: 500, fontSize: 13 }}>· priced on the ARC in SAP</span></> : <>{inr(supply.netPrice * qty)} <span className="mut" style={{ fontWeight: 500, fontSize: 13 }}>({price(supply.netPrice)} × {qty})</span></>}</div></> : <div className="mut">Pick a supplier</div>}</div>
       <Qty value={qty} onChange={setQty} />
       <button className="btn" disabled={!supply || busy || qty < minOrder} onClick={() => add({ itemId: id, qty, contractLineId: supply.contractLineId }, `Added ${qty} × ${p.name}`)}><Icon name="cart" size={18} />Add to requirement</button>
       {supply && qty < minOrder && <span className="err" style={{ fontSize: 12 }}>Min {num(minOrder)}</span>}</div>}

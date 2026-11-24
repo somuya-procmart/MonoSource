@@ -1,15 +1,9 @@
-# Development dependencies only. Not a production deployment.
+# Development dependencies only. Not a production deployment (production: Supabase, see DEPLOY.md).
+# Postgres 17 + pgvector, like Supabase. Port 54322 = the port Supabase's local stack uses.
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg17
     environment: { POSTGRES_DB: monosource, POSTGRES_HOST_AUTH_METHOD: trust }
-    ports: ["5432:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
-  redis:
-    image: redis:7
-    ports: ["6379:6379"]
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
-    ports: ["9000:9000", "9001:9001"]
-volumes: { pgdata: {} }
+    ports: ["54322:5432"]
+    volumes: [pgdata17:/var/lib/postgresql/data]
+volumes: { pgdata17: {} }

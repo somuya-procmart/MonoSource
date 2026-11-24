@@ -44,7 +44,7 @@ export class ContractsController {
     for (const k of [b.supplierId, b.erpSystemId, ...scopeNodeIds].filter(Boolean)) if (!/^[0-9a-f-]{36}$/.test(k)) throw new BadRequestException('Bad id in request');
     for (const d of [b.validFrom, b.validTo].filter(Boolean)) if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new BadRequestException('Dates must be YYYY-MM-DD');
 
-    const stored = this.storage.put(ctx.tenantId, file.buffer);
+    const stored = await this.storage.put(ctx.tenantId, file.buffer);
     return this.db.tx(ctx, async (c) => {
       for (const n of scopeNodeIds) {
         if (!(await c.query(`SELECT 1 FROM org_nodes WHERE id=$1`, [n])).rowCount) throw new BadRequestException('Unknown scope node');
@@ -79,7 +79,7 @@ export class ContractsController {
       if (ct.status !== 'draft' || (await c.query(`SELECT 1 FROM contract_lines WHERE contract_id=$1`, [id])).rowCount) throw new ConflictException('Only a draft contract without lines can be re-extracted');
       const d = (await c.query(`SELECT * FROM documents WHERE id=$1`, [ct.document_id])).rows[0];
       if (!d) throw new NotFoundException('Original document missing');
-      const out = await ingestDocument(c, ctx, ct, d, { buffer: this.storage.get(d.storage_key), originalname: d.filename, mimetype: d.mime });
+      const out = await ingestDocument(c, ctx, ct, d, { buffer: await this.storage.get(d.storage_key), originalname: d.filename, mimetype: d.mime });
       return { id, ...out };
     });
   }
@@ -141,7 +141,7 @@ export class ContractsController {
     if (!d) throw new NotFoundException();
     res.setHeader('Content-Disposition', `attachment; filename="${d.filename.replace(/[^\w.\- ]/g, '_')}"`);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.type('application/octet-stream').send(this.storage.get(d.storage_key));
+    res.type("application/octet-stream").send(await this.storage.get(d.storage_key));
   }
 
   // ───────── human review ─────────

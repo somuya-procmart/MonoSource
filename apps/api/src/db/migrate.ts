@@ -32,6 +32,7 @@ export async function migrate(adminUrl = process.env.DATABASE_ADMIN_URL || DEFAU
     await c.query(`GRANT USAGE ON SCHEMA public TO monosource_app`);
     await c.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO monosource_app`);
     await c.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO monosource_app`);
+    await c.query(`GRANT EXECUTE ON FUNCTION ms_search_candidates(uuid[], text, text, text[], boolean, boolean, text, text[]) TO monosource_app`);
     await c.query(`REVOKE ALL ON schema_migrations FROM monosource_app`);
   } finally {
     await c.end();

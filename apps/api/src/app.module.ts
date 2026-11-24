@@ -21,6 +21,8 @@ import { AgenticController } from './buying/agentic.controller';
 import { SourceController } from './catalogue/source.controller';
 import { SimulateController } from './integrations/simulate.controller';
 import { OutboxService } from './outbox/outbox.service';
+import { McpController } from './agent/mcp.controller';
+import { CronController } from './cron/cron.controller';
 
 if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET must be set in production');
 
@@ -29,7 +31,7 @@ if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') throw new 
     JwtModule.register({ global: true, secret: process.env.JWT_SECRET || 'dev-only-secret-change-me', signOptions: { expiresIn: '8h' } }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: Number(process.env.RATE_LIMIT || 600) }]),
   ],
-  controllers: [IdentityController, OrgController, CatalogueController, SuppliersController, ContractsController, BuyingController, SourcingController, OrdersController, AnalyticsController, AskController, ExperienceController, SourceController, AgenticController, SimulateController],
+  controllers: [IdentityController, OrgController, CatalogueController, SuppliersController, ContractsController, BuyingController, SourcingController, OrdersController, AnalyticsController, AskController, ExperienceController, SourceController, AgenticController, SimulateController, McpController, CronController],
   providers: [Db, Storage, OutboxService, FollowUpService, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: AuthGuard }],
 })
 export class AppModule {}

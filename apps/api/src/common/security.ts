@@ -88,6 +88,8 @@ export class AuthGuard implements CanActivate {
     if (!h.startsWith('Bearer ')) throw new UnauthorizedException();
     let claims: any;
     try { claims = await this.jwt.verifyAsync(h.slice(7)); } catch { throw new UnauthorizedException(); }
+    // Long-lived MCP tokens only open the read-only MCP endpoint.
+    if (claims.scope === 'mcp' && !String(req.path ?? req.url).startsWith('/mcp')) throw new ForbiddenException('This token only works for the MCP endpoint');
 
     // Permissions are re-read from the DB on every request, so revoking a role takes effect immediately.
     const ctx = await this.db.tx({ tenantId: claims.tid }, async (c) => {

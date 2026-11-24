@@ -47,7 +47,7 @@ export function GlobalSearch({ variant }: { variant: 'bar' | 'hero' }) {
   const goProducts = (term: string, extra = '') => { const t = term.trim(); setOpen(false); if (t) remember(t); router.push(`/search?q=${encodeURIComponent(t)}${extra}`); };
   const runAsk = useCallback(async (text: string, answers: Record<string, string>, skipped: string[]) => {
     const my = ++seq.current; setAsk({ text, answers, skipped, res: null, busy: true }); setOpen(true);
-    try { const [res] = await Promise.all([api('/ask', { body: { text, plantId: plant || undefined, answers, skipped } }), new Promise((r) => setTimeout(r, 900))]); if (my === seq.current) setAsk({ text, answers, skipped, res, busy: false }); }
+    try { const [res] = await Promise.all([api('/ask', { body: { text, plantId: plant || undefined, answers, skipped } }), Promise.resolve()]); if (my === seq.current) setAsk({ text, answers, skipped, res, busy: false }); }
     catch { if (my === seq.current) setAsk({ text, answers, skipped, res: { message: 'Something went wrong. Try again.', candidates: [], total: 0 }, busy: false }); }
   }, [plant]);
   const goAsk = (t: string) => { const v = t.trim(); if (!v) return; remember(v); setOpen(false); try { sessionStorage.removeItem('ms_ask'); } catch { /* ignore */ } router.push(`/ask?q=${encodeURIComponent(v)}`); };
@@ -67,7 +67,7 @@ export function GlobalSearch({ variant }: { variant: 'bar' | 'hero' }) {
     else if (e.key === 'Escape') setOpen(false);
     else if (e.key === 'Enter') { e.preventDefault(); const r = hi >= 0 ? rows[hi] : null; if (r) pick(r); else submit(); }
   };
-  const r = ask.res; const answers = Object.entries((r?.answers ?? {}) as Record<string, { value: string; source: string }>);
+  const r = ask.res; const answers = Object.entries((r?.answers ?? {}) as Record<string, { value: string; source: string; label?: string }>);
   const L = variant === 'hero';
 
   return (
@@ -103,10 +103,10 @@ export function GlobalSearch({ variant }: { variant: 'bar' | 'hero' }) {
           <div className="ask-you"><span className="avatar" style={{ width: 28, height: 28, fontSize: 11 }}>You</span><div className="bubble">{ask.text}</div></div>
           {ask.busy ? <div className="ask-think">{['Understanding your requirement', 'Matching products in your catalogue'].slice(0, step + 1).map((t, i) => <div key={t} className="step-line"><Icon name={i < step ? 'checkCircle' : 'sparkles'} size={15} style={{ color: i < step ? 'var(--ok)' : '#6d3fd6' }} />{t}{i === step && '…'}</div>)}
             <div className="skel" style={{ height: 54, marginTop: 6 }} /></div> : r && <>
-            {answers.length > 0 && <div className="row" style={{ marginBottom: 12 }}><span className="mut" style={{ fontSize: 12, fontWeight: 600 }}>UNDERSTOOD</span>{answers.map(([k, a]) => <span key={k} className="fchip">{k}: {a.value}<button type="button" aria-label={`Remove ${k}`} onClick={() => { const n = { ...ask.answers }; delete n[k]; runAsk(ask.text, n, a.source === 'your text' ? [...ask.skipped, k] : ask.skipped); }}><Icon name="x" size={12} /></button></span>)}</div>}
+            {answers.length > 0 && <div className="row" style={{ marginBottom: 12 }}><span className="mut" style={{ fontSize: 12, fontWeight: 600 }}>UNDERSTOOD</span>{answers.map(([k, a]) => <span key={k} className="fchip">{a.label ?? k}: {a.value}<button type="button" aria-label={`Remove ${k}`} onClick={() => { const n = { ...ask.answers }; delete n[k]; runAsk(ask.text, n, a.source === 'your text' ? [...ask.skipped, k] : ask.skipped); }}><Icon name="x" size={12} /></button></span>)}</div>}
             {r.question && !r.done && <div className="ask-q"><div style={{ fontWeight: 600, marginBottom: 2 }}>{r.question.label}?{r.question.required && <span className="tag warn" style={{ marginLeft: 8 }}>Needed</span>}</div>
               <div className="mut" style={{ fontSize: 13, marginBottom: 10 }}>{r.total} item{r.total === 1 ? '' : 's'} match so far.{r.question.unknownCount > 0 && ` ${r.question.unknownCount} don’t record this detail.`}</div>
-              <div className="row" style={{ marginBottom: 0 }}>{r.question.options.map((o: any) => <button key={o.value} type="button" className="opt" onClick={() => answer(r.question.key, o.value)}>{o.value}<small>{o.count}</small></button>)}
+              <div className="row" style={{ marginBottom: 0 }}>{r.question.options.map((o: any) => <button key={o.value} type="button" className="opt" onClick={() => answer(r.question.key, o.value)}>{o.label ?? o.value}<small>{o.count}</small></button>)}
                 {!r.question.required && <button type="button" className="opt" style={{ borderStyle: 'dashed', color: 'var(--mut)' }} onClick={() => runAsk(ask.text, ask.answers, [...ask.skipped, r.question.key])}>Not sure</button>}</div></div>}
             {r.candidates.length > 0 ? <>
               <div className="sb-head" style={{ padding: '4px 2px 8px' }}><span>{r.done ? `Best matches · ${r.total}` : `Matches so far · ${r.total}`}</span></div>

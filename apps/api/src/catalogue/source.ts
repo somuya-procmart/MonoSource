@@ -11,7 +11,7 @@ import { norm } from '../buying/ask';
 export type SourceCase = 'A' | 'B' | 'D' | 'E';
 export interface Supply {
   contractLineId: string; contractId: string; type: string; number: string; supplierId: string; supplier: string;
-  netPrice: number; uom: string; moq: number | null; qtyCap: number | null; balance: number | null; validFrom: string | null; validTo: string | null; daysLeft: number | null;
+  netPrice: number | null; uom: string; moq: number | null; qtyCap: number | null; balance: number | null; validFrom: string | null; validTo: string | null; daysLeft: number | null;
   appliesTo: string[]; appliesToPlant: boolean | null; orderable: boolean | null; blockedReason: string | null;
 }
 export interface SourceView {
@@ -46,13 +46,20 @@ export async function computeSources(c: PoolClient, itemIds: string[], plantId: 
           AND EXISTS (SELECT 1 FROM contract_scopes cs JOIN up ON up.id=cs.node_id WHERE cs.contract_id=ct.id)`, [plantId])).rows
       .forEach((r) => { const k = r.category; (plantCategorySuppliers.get(k) ?? plantCategorySuppliers.set(k, new Set()).get(k)!).add(`${r.supplier_id}|${r.legal_name}`); });
   }
-  const items = (await c.query(`SELECT id, category, specs FROM catalogue_items WHERE id = ANY($1::uuid[])`, [itemIds])).rows;
+  // "category" for alternatives = the product type (same kind of thing), falling back to the category for unclassified items
+  const items = (await c.query(`SELECT id, category AS cat, coalesce(product_type_id::text, category) AS category, specs FROM catalogue_items WHERE id = ANY($1::uuid[])`, [itemIds])).rows;
   const expired = (await c.query(
     `SELECT cl.item_id, ct.supplier_id, s.legal_name, ct.number, ct.valid_to FROM contract_lines cl JOIN contracts ct ON ct.id=cl.contract_id JOIN suppliers s ON s.id=ct.supplier_id
       WHERE cl.item_id = ANY($1::uuid[]) AND ct.contract_type IN ('ARC','QRC') AND cl.status='published' AND ct.valid_to < current_date`, [itemIds])).rows;
   const requests = plantId ? (await c.query(`SELECT id, item_id, status FROM coverage_requests WHERE plant_node_id=$1 AND item_id = ANY($2::uuid[]) AND status='open'`, [plantId, itemIds])).rows : [];
   const approved = (await c.query(`SELECT item_id, alternative_item_id FROM item_alternatives WHERE item_id = ANY($1::uuid[]) OR alternative_item_id = ANY($1::uuid[])`, [itemIds])).rows;
-  const sameCat = (await c.query(`SELECT id, category, specs FROM catalogue_items WHERE status='active' AND category = ANY($1::text[])`, [[...new Set(items.map((i) => i.category).filter(Boolean))]])).rows;
+  // Only items of the same product type that record at least two specs can be suggested as alternatives.
+  const withSpecs = items.filter((i) => Object.keys(i.specs ?? {}).length >= 2);
+  const isUuid = (x: string) => /^[0-9a-f-]{36}$/.test(x);
+  const kinds = [...new Set(withSpecs.map((i) => i.category as string))];
+  const sameCat = kinds.length ? (await c.query(`SELECT id, coalesce(product_type_id::text, category) AS category, specs FROM catalogue_items
+      WHERE status='active' AND specs <> '{}'::jsonb AND (product_type_id = ANY($1::uuid[]) OR (product_type_id IS NULL AND category = ANY($2::text[]))) LIMIT 5000`,
+      [kinds.filter(isUuid), kinds.filter((k) => !isUuid(k))])).rows : [];
 
   for (const it of items) {
     const mine = rows.filter((r) => r.item_id === it.id).map((r): Supply => ({
@@ -67,12 +74,12 @@ export async function computeSources(c: PoolClient, itemIds: string[], plantId: 
     const known: SourceView['knownSuppliers'] = [];
     for (const e of expired.filter((x) => x.item_id === it.id)) known.push({ id: e.supplier_id, name: e.legal_name, why: `Contract ${e.number} for this item ended ${String(e.valid_to).slice(0, 10)}` });
     for (const s of mine.filter((x) => x.appliesToPlant && x.orderable === false)) known.push({ id: s.supplierId, name: s.supplier, why: s.blockedReason ?? 'Not orderable yet' });
-    for (const k of plantCategorySuppliers.get(it.category ?? '') ?? []) { const [id, name] = k.split('|'); if (!known.some((x) => x.id === id)) known.push({ id, name, why: `Approved supplier for ${it.category} at your plant` }); }
+    for (const k of plantCategorySuppliers.get(it.cat ?? '') ?? []) { const [id, name] = k.split('|'); if (!known.some((x) => x.id === id)) known.push({ id, name, why: `Approved supplier for ${it.cat} at your plant` }); }
     const cs: SourceCase = !plantId ? (mine.length ? 'A' : 'E') : supplies.length ? 'A' : elsewhere.length ? 'B' : known.length ? 'D' : 'E';
     const nApproved = approved.filter((a) => a.item_id === it.id || a.alternative_item_id === it.id).length;
-    out.set(it.id, { case: plantId ? cs : cs, multiple: supplies.length > 1, supplies: supplies.sort((a, b) => a.netPrice - b.netPrice), elsewhere, knownSuppliers: known,
+    out.set(it.id, { case: plantId ? cs : cs, multiple: supplies.length > 1, supplies: supplies.sort((a, b) => ((a.netPrice ?? Infinity) - (b.netPrice ?? Infinity)) || 0), elsewhere, knownSuppliers: known,
       alternatives: { approved: nApproved, suggested: suggestSimilar(it, sameCat, approved).length }, request: requests.find((r) => r.item_id === it.id) ?? null,
-      lowestPrice: supplies.length ? Math.min(...supplies.map((s) => s.netPrice)) : null });
+      lowestPrice: supplies.some((s) => s.netPrice != null) ? Math.min(...supplies.filter((s) => s.netPrice != null).map((s) => s.netPrice as number)) : null });
   }
   void userId;
   return out;
